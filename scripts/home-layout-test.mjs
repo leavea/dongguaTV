@@ -62,7 +62,7 @@ console.log('② 模板接线');
     for (const k of ['history', 'fav', 'recommend', 'popular', 'live']) ok(new RegExp(`<div v-(?:else-)?if="k === '${k}'" class="section-container home-sec`).test(TPL), `板块 ${k} 是 homeBlocks 的一个分支,用统一间距(home-sec)`);
     ok(/<section v-else-if="k === 'catnav'" class="catnav/.test(TPL), '分类栏是一个分支');
     ok(/<div v-else class="section-container animate__animated animate__fadeInUp" :class="\{ 'home-first': bi === 0 \}"\s*:ref="key \+ '-section'" :data-row-key="key">/.test(TPL), '榜单行(随机盲盒 + 其余分类)是 v-else 分支,ref / data-row-key 照旧');
-    ok((TPL.match(/'home-first': bi === 0/g) || []).length === 7, '七种块都会在排第一时拿到 home-first(上边距 60)');
+    ok((TPL.match(/'home-first': bi === 0/g) || []).length === 8, '七种块 + 分类组头都会在排第一时拿到 home-first(上边距 60)');
     ok(!/v-for="\(config, key, index\) in rowConfigs"/.test(TPL) && !/key === 'randomRow' && hideRandomRow/.test(TPL), '不再直接遍历 rowConfigs、不再用 v-show 藏随机盲盒');
     ok(!/style="margin-top: 60px; margin-bottom: 10px;"/.test(TPL) && !/marginTop: watchHistory\.length \? '48px' : '60px'/.test(TPL), '旧的"按上面是谁"写死的边距删掉了');
     ok(/\.home-flow > \.home-sec \{ margin-top: 48px; margin-bottom: 44px; \}/.test(HTML) && /\.home-flow > \.home-first \{ margin-top: 60px; \}/.test(HTML), '间距 CSS:板块 48/44,第一个 60');
@@ -74,7 +74,7 @@ console.log('② 模板接线');
     ok(/<div class="info-modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">\s*<div class="settings-head">[\s\S]*?<\/div>\s*<div class="settings-body">/.test(TPL), '弹窗结构:标题栏 settings-head + 滚动区 settings-body');
     ok(/\.settings-modal \{[^}]*max-height: calc\(100vh - 40px\);[^}]*max-height: calc\(100dvh - 40px\);/.test(HTML) && /\.settings-body \{[^}]*min-height: 0;[^}]*overflow-y: auto;/.test(HTML), '弹窗最高到屏幕高度(vh 兜底 + dvh),内容区 overflow-y:auto');
     ok(/@media \(max-height: 760px\) \{[\s\S]*?\.set-row, \.set-block \{ padding: 10px 0; \}/.test(HTML), '矮屏把行距收紧');
-    const modal = TPL.slice(TPL.indexOf('v-if="showSettingsModal"'), TPL.indexOf('<!-- ★★★ TMDb 电影详情弹窗 ★★★ -->'));
+    const modal = TPL.slice(TPL.indexOf('v-if="showSettingsModal"'), TPL.indexOf('<!-- ★★★ 影视详情弹窗（豆瓣 / TMDB 可选） ★★★ -->'));
     ok(!/hideRandomRow/.test(modal) && !/隐藏随机盲盒/.test(modal), '旧的「隐藏随机盲盒」开关去掉了(并进首页板块)');
     ok(/<li v-for="\(s, i\) in homeLayoutView" :key="s\.k"/.test(modal) && /moveHomeSection\(s\.k, -1\)/.test(modal) && /moveHomeSection\(s\.k, 1\)/.test(modal)
         && /toggleHomeSection\(s\.k, \$event\.target\.checked\)/.test(modal) && /@click="resetHomeLayout"/.test(modal), '首页板块:逐个列出,上移 / 下移 / 开关 / 恢复默认');
@@ -120,8 +120,8 @@ console.log('② 模板接线');
     const flow = app && findBy(app, hasCls('home-flow'));
     const loop = flow && kidsOf(flow);
     const branches = loop && loop.length === 1 && loop[0].nodeName === 'template' ? kidsOf(loop[0]).map(n => n.nodeName + ' ' + (attr(n, 'v-if') !== null ? 'if ' + attr(n, 'v-if') : attr(n, 'v-else-if') !== null ? 'elif ' + attr(n, 'v-else-if') : attr(n, 'v-else') !== null ? 'else' : '?')) : null;
-    ok(JSON.stringify(branches) === JSON.stringify(["div if k === 'history'", "div elif k === 'fav'", "div elif k === 'recommend'", "div elif k === 'popular'", "div elif k === 'live'", "section elif k === 'catnav'", 'div else']),
-        '浏览器解析后:首页内容区里只有那一个 v-for,下面正好是七个分支(闭合标签没放错)', branches);
+    ok(JSON.stringify(branches) === JSON.stringify(["div if k === 'history'", "div elif k === 'fav'", "div elif k === 'recommend'", "div elif k === 'popular'", "div elif k === 'live'", "section elif k === 'catnav'", "div elif k === 'group'", 'div else']),
+        '浏览器解析后:首页内容区里只有那一个 v-for,下面正好是八个分支(闭合标签没放错)', branches);
     const sm = app && findBy(app, hasCls('settings-modal'));
     const smKids = sm ? kidsOf(sm).map(n => attr(n, 'class')) : null;
     const body = sm && findBy(sm, hasCls('settings-body'));
@@ -188,16 +188,29 @@ const ctx = new Proxy(ctxObj, {
 });
 try { vm.runInNewContext(SRC, ctx, { timeout: 5000 }); } catch (e) { }
 const M = (captured && captured.methods) || {}, CP = (captured && captured.computed) || {}, W = (captured && captured.watch) || {};
-ok(!!captured && ['moveHomeSection', 'toggleHomeSection', 'resetHomeLayout', '_saveHomeLayout', '_pushHomeLayout', 'pullUserSettings', 'catNavJump', 'onFavPopRowScroll', 'scrollRowBy', 'onRecommendScroll'].every(n => typeof M[n] === 'function')
+ok(!!captured && ['moveHomeSection', 'toggleHomeSection', 'resetHomeLayout', '_saveHomeLayout', '_pushHomeLayout', 'pullUserSettings', 'catNavJump', 'onFavPopRowScroll', 'scrollRowBy', 'onRecommendScroll', 'toggleHomeGroup', 'fetchGroupRows'].every(n => typeof M[n] === 'function')
     && ['homeOn', 'hideRandomRow', 'homeBlocks', 'homeLayoutView', 'homeLayoutIsDefault'].every(n => typeof CP[n] === 'function'), '沙箱里跑出了首页板块的方法和计算属性');
 const D = (captured && typeof captured.data === 'function') ? captured.data.call(new Proxy({}, { get: () => any() })) : {};
 ok(D && Array.isArray(D.homeLayout) && ks(D.homeLayout) === DEF && D.hideRandomRow === undefined, 'data:默认布局;hideRandomRow 不再是 data(由布局算出)');
+
+const ROW_CONFIGS = {
+    randomRow: {}, movieHot: {}, movieNew: {}, movieTop: {}, movieCold: {}, movieCN: {}, movieUS: {}, movieKR: {}, movieJP: {},
+    tvHot: {}, tvCN: {}, tvUS: {}, tvJP: {}, tvKR: {}, tvDoc: {}, tvAnime: {}, tvShow: {},
+};
+const HOME_GROUPS = [
+    { k: 'movie', l: '电影', icon: 'fa-film', keys: ['movieHot', 'movieNew', 'movieTop', 'movieCold', 'movieCN', 'movieUS', 'movieKR', 'movieJP'] },
+    { k: 'tv', l: '剧集', icon: 'fa-tv', keys: ['tvHot', 'tvCN', 'tvUS', 'tvJP', 'tvKR', 'tvDoc'] },
+    { k: 'anime', l: '动漫', icon: 'fa-dragon', keys: ['tvAnime'] },
+    { k: 'variety', l: '综艺', icon: 'fa-microphone-alt', keys: ['tvShow'] },
+];
 
 function makeApp(over) {
     const app = Object.assign({
         homeLayout: H.normalize(null), homeLayoutMsg: '',
         watchHistory: [], favoritesEnabled: true, favList: [], recommendList: [], popularList: [], liveEnabled: true, liveChannels: [],
-        rowConfigs: { randomRow: {}, movieRow: {}, tvRow: {}, cnRow: {} },
+        homeGroups: HOME_GROUPS,
+        homeGroupOpen: { movie: false, tv: false, anime: false, variety: false },
+        rowConfigs: Object.assign({}, ROW_CONFIGS),
         syncEnabled: false, syncToken: '', showSettingsModal: false, $refs: {},
         $nextTick(f) { if (f) f(); return Promise.resolve(); },
     }, over || {});
@@ -209,13 +222,16 @@ const ids = app => app.homeBlocks.map(b => b.id).join(',');
 {
     // 首页块:开着且有内容的板块按布局顺序,随机盲盒就是 randomRow 那一行,其余榜单接在最后
     const a = makeApp({ watchHistory: [1], favList: [1], popularList: [1, 2, 3], liveChannels: [1] });
-    ok(ids(a) === 'history,fav,live,catnav,row:randomRow,row:movieRow,row:tvRow,row:cnRow', '没推荐、大家都在看不足 4 部 → 不出现;其余按默认顺序', ids(a));
-    const b = a.homeBlocks.find(x => x.id === 'row:movieRow');
-    ok(b && b.k === 'row' && b.key === 'movieRow' && b.config === a.rowConfigs.movieRow, '榜单块带着 key / config(行模板照旧用这两个名字)');
+    ok(ids(a) === 'history,fav,live,catnav,row:randomRow,group:movie,group:tv,group:anime,group:variety', '没推荐、大家都在看不足 4 部 → 不出现;默认分类只剩组头', ids(a));
+    ok(!ids(a).includes('row:movieHot'), '默认收起:电影榜单不渲染(也就不会请求)');
+    const m = makeApp({ homeGroupOpen: { movie: true, tv: false, anime: false, variety: false } });
+    const b = m.homeBlocks.find(x => x.id === 'row:movieHot');
+    ok(b && b.k === 'row' && b.key === 'movieHot' && b.config === m.rowConfigs.movieHot, '展开电影组后榜单块带着 key / config');
+    ok(ids(m).includes('group:movie,row:movieHot,row:movieNew'), '展开电影组才渲染电影榜单', ids(m));
     a.homeLayout = H.normalize([{ k: 'random' }, { k: 'live', on: false }]);
-    ok(ids(a) === 'row:randomRow,history,fav,catnav,row:movieRow,row:tvRow,row:cnRow', '随机盲盒挪到最前、直播关掉', ids(a));
+    ok(ids(a) === 'row:randomRow,history,fav,catnav,group:movie,group:tv,group:anime,group:variety', '随机盲盒挪到最前、直播关掉', ids(a));
     a.homeLayout = H.normalize([{ k: 'random', on: false }, { k: 'catnav', on: false }]);
-    ok(ids(a) === 'history,fav,live,row:movieRow,row:tvRow,row:cnRow' && a.hideRandomRow === true, '随机盲盒 / 分类栏都关:都不渲染;hideRandomRow 跟着变', ids(a));
+    ok(ids(a) === 'history,fav,live,group:movie,group:tv,group:anime,group:variety' && a.hideRandomRow === true, '随机盲盒 / 分类栏都关:都不渲染;hideRandomRow 跟着变', ids(a));
     const e = makeApp({ favoritesEnabled: false, liveEnabled: false, homeLayout: H.normalize(null) });
     ok(e.homeLayoutView.map(s => s.k).join(',') === 'history,recommend,popular,catnav,random' && e.homeLayoutView[0].l === '继续观看' && e.homeLayoutView[0].on === true,
         '设置里不列站长没开的收藏 / 直播', e.homeLayoutView.map(s => s.k));

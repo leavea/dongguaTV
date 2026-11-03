@@ -2414,6 +2414,16 @@
         .home-flow > .home-sec { margin-top: 48px; margin-bottom: 44px; }
         .home-flow > .home-first { margin-top: 60px; }
 
+        /* 🗂️ 首页分类分组头：收起时只保留一行，展开后才渲染该组榜单 */
+        .home-flow > .home-group { margin-top: 36px; margin-bottom: 28px; }
+        .home-flow > .home-group.open { margin-bottom: 0; }
+        .home-group-head { margin-bottom: 0; }
+        .home-group.open .home-group-head { margin-bottom: 12px; }
+        .home-group-head .section-title i { color: var(--accent); opacity: 0.9; }
+        .home-group-toggle { margin-left: 8px; }
+        /* 手机上 .row-all + .expand-toggle 会隐藏行级"展开"；分类组的折叠按钮必须保留 */
+        .home-flow .home-group-head .home-group-toggle { display: flex; }
+
         /* 分类标题与排序切换 */
         .section-title i.sort-toggle-icon {
             cursor: pointer;
@@ -5185,6 +5195,17 @@
                     </div>
                 </div>
             </section>
+            <!-- 🗂️ 分类分组头：收起时只保留这一行，不渲染/请求该组榜单 -->
+            <div v-else-if="k === 'group'" class="section-container home-sec home-group" :class="{ 'home-first': bi === 0, open: homeGroupOpen[key] }">
+                <div class="section-header home-group-head">
+                    <div class="section-line"></div>
+                    <div class="section-title"><i :class="['fas', config.icon]"></i> {{ config.l }}</div>
+                    <button type="button" class="expand-toggle row-all" @click="openBrowse({ type: key, sel: {} })">全部{{ config.l }} <i class="fas fa-chevron-right"></i></button>
+                    <button type="button" class="expand-toggle home-group-toggle" :class="{ expanded: homeGroupOpen[key] }" @click="toggleHomeGroup(key)" :aria-expanded="homeGroupOpen[key]">
+                        {{ homeGroupOpen[key] ? '收起' : '展开' }} <i class="fas fa-chevron-down"></i>
+                    </button>
+                </div>
+            </div>
             <!-- 动态生成的榜单 Rows(随机盲盒在设置里排的位置,其余分类榜单排在最后) -->
             <div v-else class="section-container animate__animated animate__fadeInUp" :class="{ 'home-first': bi === 0 }"
                 :ref="key + '-section'" :data-row-key="key">
@@ -9699,8 +9720,27 @@
                     // === 动态榜单配置 ===
                     rowLists: {}, // 存储各榜单数据 { movieRow: [...], ... }
                     expandedRows: {}, // 存储各榜单的展开状态 { movieRow: true, ... }
+                    _rowLoading: {}, // 正在加载的榜单 key，防止快速展开/收起时重复请求
                     viewPages: {}, // 存储各榜单展开时的查看页码 { movieRow: 1, ... }
                     pageLoadingKeys: {}, // 防止重复快速点击加载 { movieRow: true, ... }
+                    // 🗂️ 首页分类分组：默认全部收起，点开某组才请求该组榜单
+                    homeGroups: [
+                        { k: 'movie', l: '电影', icon: 'fa-film', keys: ['movieHot', 'movieNew', 'movieTop', 'movieCold', 'movieCN', 'movieUS', 'movieKR', 'movieJP'] },
+                        { k: 'tv', l: '剧集', icon: 'fa-tv', keys: ['tvHot', 'tvCN', 'tvUS', 'tvJP', 'tvKR', 'tvDoc'] },
+                        { k: 'anime', l: '动漫', icon: 'fa-dragon', keys: ['tvAnime'] },
+                        { k: 'variety', l: '综艺', icon: 'fa-microphone-alt', keys: ['tvShow'] },
+                    ],
+                    homeGroupOpen: (function () {
+                        const base = { movie: false, tv: false, anime: false, variety: false };
+                        try {
+                            if (typeof localStorage === 'undefined') return base;
+                            const raw = JSON.parse(localStorage.getItem('donggua_home_groups') || 'null');
+                            if (raw && typeof raw === 'object') {
+                                for (const k of Object.keys(base)) base[k] = raw[k] === true;
+                            }
+                        } catch (e) { }
+                        return base;
+                    })(),
                     rowConfigs: {
                         randomRow: { title: '随机盲盒·惊喜呈现', icon: 'fa-random', source: 'douban-random', page: 1 },
                         movieHot: { title: '热门电影·豆瓣热榜', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '热门', page: 1 },
@@ -10066,7 +10106,12 @@
                         if (s.k === 'random') out.push(row('randomRow'));
                         else if (has[s.k]) out.push({ id: s.k, k: s.k });
                     }
-                    for (const key of Object.keys(this.rowConfigs)) if (key !== 'randomRow') out.push(row(key));
+                    for (const g of this.homeGroups) {
+                        out.push({ id: 'group:' + g.k, k: 'group', key: g.k, config: g });
+                        if (this.homeGroupOpen[g.k]) {
+                            for (const key of g.keys) out.push(row(key));
+                        }
+                    }
                     return out;
                 },
                 // 偏好设置里列出的板块:站长没开的(直播 / 收藏)不列
@@ -13715,11 +13760,14 @@
 
                 // 加载单个榜单数据
                 fetchRow(key, loadMore = false) {
+                    if (this._rowLoading[key]) return Promise.resolve();
                     if (key === 'randomRow') {
-                        return this.fetchRandomMixed(loadMore);
+                        this._rowLoading[key] = true;
+                        return this.fetchRandomMixed(loadMore).finally(() => { this._rowLoading[key] = false; });
                     }
                     const config = this.rowConfigs[key];
                     if (!config || !config.source) return Promise.resolve();
+                    this._rowLoading[key] = true;
 
                     const limit = 20;
                     if (loadMore) {
@@ -13754,7 +13802,8 @@
                         .catch(err => {
                             config.done = true;
                             console.error(`[Douban Row] ${key}:`, err);
-                        });
+                        })
+                        .finally(() => { this._rowLoading[key] = false; });
                 },
 
                 // 隐秘切换排序模式
@@ -13788,9 +13837,39 @@
                     if (window.navigator.vibrate) window.navigator.vibrate(10);
                 },
 
+                // 🗂️ 展开/收起一个分类：默认收起，展开时才拉取该组榜单
+                toggleHomeGroup(k) {
+                    const g = this.homeGroups.find(x => x.k === k);
+                    if (!g) return;
+                    const open = !this.homeGroupOpen[k];
+                    this.homeGroupOpen = Object.assign({}, this.homeGroupOpen, { [k]: open });
+                    try { localStorage.setItem('donggua_home_groups', JSON.stringify(this.homeGroupOpen)); } catch (e) { }
+                    if (open) this.fetchGroupRows(k);
+                },
+                fetchGroupRows(k) {
+                    const g = this.homeGroups.find(x => x.k === k);
+                    if (!g) return;
+                    g.keys.forEach((key, i) => {
+                        if (this.rowLists[key] && this.rowLists[key].length) return;
+                        setTimeout(() => {
+                            if (!this.homeGroupOpen[k]) return;   // 展开后马上又收起：不再发请求
+                            if (this.rowLists[key] && this.rowLists[key].length) return;
+                            this.fetchRow(key);
+                        }, i * 100);
+                    });
+                },
+
                 // 初始化榜单 (优先加载首屏可见榜单)
                 fetchAllLists() {
-                    const keys = Object.keys(this.rowConfigs);
+                    const keys = [];
+                    if (this.homeOn.random) keys.push('randomRow');
+                    for (const g of this.homeGroups) {
+                        if (this.homeGroupOpen[g.k]) keys.push(...g.keys);
+                    }
+                    if (!keys.length) {
+                        console.log('[榜单加载] 全部分类已收起，跳过请求');
+                        return;
+                    }
 
                     // 设备检测（仅用于日志）
                     const viewportWidth = window.innerWidth;
