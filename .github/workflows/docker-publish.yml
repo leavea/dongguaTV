@@ -2,6 +2,8 @@ name: Docker Build & Publish (Multi-Arch)
 
 on:
   push:
+    # 参考 MoonTVPlus 的 docker-image-lite:推送 main 就自动构建并发布 latest
+    branches: [ "main" ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
@@ -9,10 +11,13 @@ on:
   # 手动重建 latest:Node 基础镜像出安全补丁时不必等发版
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   GHCR_REGISTRY: ghcr.io
-  DOCKERHUB_IMAGE: ednovas/dongguatv
-  # ghcr.io requires lowercase image names
+  # ghcr.io requires lowercase image names（leavea 本身是小写）
   GHCR_IMAGE: ${{ github.repository_owner }}/dongguatv
 
 jobs:
@@ -45,21 +50,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      # 登录 Docker Hub
-      - name: Log into Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
-            docker.io/${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=raw,value=latest
             type=semver,pattern={{version}}
