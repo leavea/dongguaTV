@@ -49,6 +49,9 @@ try { kazumi = require('./lib/kazumi'); } catch (e) { console.warn('[Kazumi] 模
 //    只用于前端徽章与"同一可达档内"的选源偏好;加载失败/查询抛错只是不带徽章,绝不影响搜索与播放。
 let siteProfiles = null;
 try { siteProfiles = require('./lib/site-profiles'); } catch (e) { console.warn('[SiteProfiles] 模块加载失败,线路徽章已禁用:', e.message); }
+// 🎬 豆瓣数据源（首页轮播/榜单/分类浏览）：不依赖 TMDB Key。模块加载失败时首页降级为空，不影响搜索/播放。
+let douban = null;
+try { douban = require('./lib/douban'); } catch (e) { console.warn('[Douban] 模块加载失败,豆瓣首页已禁用:', e.message); }
 function profOf(site) {
     if (!siteProfiles) return undefined;   // undefined → JSON 里直接没有 site_profile 字段,前端回退 /api/sites 的 profiles 表
     try { return siteProfiles.profileFor(site); } catch (e) { return undefined; }
@@ -917,6 +920,7 @@ const apiLimiter = rateLimit({
         if (req.path === '/api/config' || req.path.startsWith('/api/auth/') || req.path === '/api/sites') return true;
         // 图片代理请求不限流（前端有大量图片）
         if (req.path.startsWith('/api/tmdb-image/')) return true;
+        if (req.path.startsWith('/api/douban-image')) return true;
         // TMDB 代理请求不限流
         if (req.path === '/api/tmdb-proxy') return true;
         return false;
@@ -3967,6 +3971,144 @@ app.get('/api/tmdb-image/:size/:filename', async (req, res) => {
             try { fs.unlinkSync(localPath); } catch (e) { }
         }
         res.status(404).send('Image not found');
+    }
+});
+
+// ========== 豆瓣数据源（首页轮播/榜单/分类浏览） ==========
+// 参考 MoonTVPlus 的豆瓣接口用法：列表/最新热门/详情/搜索建议；图片必须带 Referer 代理。
+// 独立于 TMDB：不配置 TMDB_KEY 也能工作。
+const DOUBAN_IMAGE_DIR = path.join(IMAGE_CACHE_DIR, 'douban');
+const DOUBAN_IMAGE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Referer': 'https://movie.douban.com/',
+    'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+};
+
+function doubanFail(res, error, extra) {
+    const code = error && error.code;
+    const status = code === 'DOUBAN_BUDGET' ? 429 : (code === 'DOUBAN_VERIFY' ? 503 : 502);
+    console.warn('[Douban API]', code || '', error && error.message);
+    res.status(status).json(Object.assign({ code: status, error: error && error.message, list: [] }, extra || {}));
+}
+
+app.get('/api/douban/list', async (req, res) => {
+    if (!douban) return res.status(503).json({ code: 503, error: '豆瓣模块未加载', list: [] });
+    const kind = String(req.query.kind || 'movie').toLowerCase();
+    const tag = String(req.query.tag || '').trim();
+    const start = Math.max(0, parseInt(req.query.start, 10) || 0);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    if (!['movie', 'tv'].includes(kind) || !tag) {
+        return res.status(400).json({ code: 400, error: 'kind 必须是 movie/tv，tag 不能为空', list: [] });
+    }
+    try {
+        const out = await douban.listByTag(kind, tag, start, limit);
+        res.set('Cache-Control', 'public, max-age=1800');
+        res.json({ code: 200, list: out.list });
+    } catch (e) {
+        doubanFail(res, e);
+    }
+});
+
+app.get('/api/douban/recent', async (req, res) => {
+    if (!douban) return res.status(503).json({ code: 503, error: '豆瓣模块未加载', list: [] });
+    const kind = String(req.query.kind || 'tv').toLowerCase();
+    const category = String(req.query.category || '最近热门').trim();
+    const type = String(req.query.type || '全部').trim();
+    const start = Math.max(0, parseInt(req.query.start, 10) || 0);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    if (!['movie', 'tv'].includes(kind)) {
+        return res.status(400).json({ code: 400, error: 'kind 必须是 movie/tv', list: [] });
+    }
+    try {
+        const out = await douban.recentHot(kind, category, type, start, limit);
+        res.set('Cache-Control', 'public, max-age=1800');
+        res.json({ code: 200, list: out.list, total: out.total });
+    } catch (e) {
+        doubanFail(res, e);
+    }
+});
+
+app.get('/api/douban/hero', async (req, res) => {
+    if (!douban) return res.status(503).json({ code: 503, error: '豆瓣模块未加载', list: [] });
+    try {
+        const out = await douban.hero();
+        res.set('Cache-Control', 'public, max-age=1800');
+        res.json({ code: 200, list: out.list });
+    } catch (e) {
+        doubanFail(res, e);
+    }
+});
+
+app.get('/api/douban/detail', async (req, res) => {
+    if (!douban) return res.status(503).json({ code: 503, error: '豆瓣模块未加载' });
+    const id = String(req.query.id || '').trim();
+    if (!/^\d+$/.test(id)) return res.status(400).json({ code: 400, error: 'id 必须是数字' });
+    try {
+        const data = await douban.detail(id);
+        res.set('Cache-Control', 'public, max-age=21600');
+        res.json(Object.assign({ code: 200 }, data));
+    } catch (e) {
+        doubanFail(res, e);
+    }
+});
+
+app.get('/api/douban/search', async (req, res) => {
+    if (!douban) return res.status(503).json({ code: 503, error: '豆瓣模块未加载', list: [] });
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ code: 200, list: [] });
+    try {
+        const list = await douban.search(q);
+        res.set('Cache-Control', 'public, max-age=600');
+        res.json({ code: 200, list });
+    } catch (e) {
+        console.warn('[Douban API] search:', e.message);
+        res.json({ code: 200, list: [] });
+    }
+});
+
+// 豆瓣图片防盗链：必须由服务端带 Referer 抓取，并落盘缓存。
+app.get('/api/douban-image', async (req, res) => {
+    if (!douban) return res.status(503).send('豆瓣模块未加载');
+    const url = String(req.query.url || '');
+    if (!douban.imageAllowed(url)) return res.status(400).send('Invalid image URL');
+
+    let ext = 'jpg';
+    try {
+        const m = new URL(url).pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i);
+        if (m) ext = m[1].toLowerCase();
+    } catch (e) { return res.status(400).send('Invalid image URL'); }
+
+    const hash = crypto.createHash('sha1').update(url).digest('hex');
+    const localPath = path.join(DOUBAN_IMAGE_DIR, hash + '.' + ext);
+
+    if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+        res.set('Cache-Control', 'public, max-age=604800');
+        return res.sendFile(localPath);
+    }
+
+    try {
+        fs.mkdirSync(DOUBAN_IMAGE_DIR, { recursive: true });
+        const response = await axios.get(url, {
+            headers: DOUBAN_IMAGE_HEADERS,
+            responseType: 'stream',
+            timeout: 15000,
+            maxRedirects: 5,
+        });
+        const finalUrl = response.request && response.request.res && response.request.res.responseUrl;
+        if (finalUrl && !douban.imageAllowed(finalUrl)) {
+            try { response.data.destroy(); } catch (e) { }
+            return res.status(502).send('Bad redirect');
+        }
+        await pipeline(response.data, fs.createWriteStream(localPath));
+        cleanCacheIfNeeded();
+        res.set('Cache-Control', 'public, max-age=604800');
+        res.sendFile(localPath);
+    } catch (error) {
+        console.warn('[Douban Image Error]', url, error.message);
+        if (fs.existsSync(localPath)) {
+            try { fs.unlinkSync(localPath); } catch (e) { }
+        }
+        res.status(502).send('Image fetch failed');
     }
 });
 

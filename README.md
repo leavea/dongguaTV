@@ -4,7 +4,7 @@ https://github.com/user-attachments/assets/8100fd07-46cd-4f16-9228-90a09075ac54
 
 # E视界 (DongguaTV Enhanced Edition)
 
-现代流媒体聚合播放器：用 TMDb 做影视资料、聚合多个 Maccms 采集站做播放源，基于 Node.js + Express + Vue 3。原版项目：[Minerchu/dongguaTV](https://github.com/Minerchu/dongguaTV)
+现代流媒体聚合播放器：首页影视资料默认用豆瓣，TMDB 可选；聚合多个 Maccms 采集站做播放源，基于 Node.js + Express + Vue 3。原版项目：[Minerchu/dongguaTV](https://github.com/Minerchu/dongguaTV)
 
 在原版基础上重构了前后端，并加入了：流式搜索、按广告情况分组的线路与自动选源、边缘 + 播放器两级去广告、跳过片头片尾、弹幕、直播、离线缓存、多用户云同步、站长后台、分享深链、PWA / Android / TV 模式等。
 
@@ -35,8 +35,8 @@ https://github.com/user-attachments/assets/8100fd07-46cd-4f16-9228-90a09075ac54
 
 | 方面 | 说明 |
 |---|---|
-| **找片** | TMDb 海报/背景/评分/简介 + 多个 Maccms 采集站聚合；SSE 流式搜索（边搜边显示）；自动生成关键词变体、英文名自动转中文名；同名不同作品自动拆成多张卡片并标年份/集数；内置 4 个番剧规则源 |
-| **首页** | 本周趋势轮播、20 个榜单（含随机盲盒）、继续观看、我的收藏、为你推荐、大家都在看、分类快捷入口、直播频道 |
+| **找片** | 豆瓣海报/评分/简介（首页）+ 多个 Maccms 采集站聚合；SSE 流式搜索（边搜边显示）；自动生成关键词变体、英文名自动转中文名；同名不同作品自动拆成多张卡片并标年份/集数；内置 4 个番剧规则源 |
+| **首页** | 豆瓣热门/最新/高分/地区榜单（电影/剧集/动漫/综艺）、随机盲盒、继续观看、我的收藏、大家都在看、分类快捷入口、直播频道；不配置 TMDB 也能用 |
 | **线路** | 按"看的时候有没有广告"分组（无广告 / 有插播 / 有水印 / 可能无法播放）+ 分辨率角标；本机测速 + 服务器兜底测速，结果按站缓存；播放失败自动换线路 |
 | **去广告** | Cloudflare Worker 边缘剔除广告分段；Worker 删不掉的插播，由播放器在播放前把整段从清单里剪掉（进度条里都没有） |
 | **播放** | 倍速 0.5–3x、进度记忆、自动下一集并预热、画中画、投屏（AirPlay / Chromecast）、手势、跳过片头片尾（自动学习、全站共享）、弹幕 |
@@ -55,7 +55,7 @@ https://github.com/user-attachments/assets/8100fd07-46cd-4f16-9228-90a09075ac54
 
 ### 1. 准备
 
-**TMDb API Key（必需）**：注册 [TMDb](https://www.themoviedb.org/signup) → [API 设置](https://www.themoviedb.org/settings/api) 申请（类型选 Developer）→ 复制 **API Key (v3 auth)**。
+**TMDB API Key（可选）**：首页和榜单默认使用豆瓣，**不需要 TMDB**。只有想启用 TMDB 的详情/分享等附加增强时才需要：注册 [TMDb](https://www.themoviedb.org/signup) → [API 设置](https://www.themoviedb.org/settings/api) 申请（类型选 Developer）→ 复制 **API Key (v3 auth)**。
 
 **采集源（必需）**：本项目**不内置**任何资源接口，需自行准备合法的 Maccms V10 JSON 接口，写进 `db.json`（首次运行会由 `db.template.json` 生成一份占位）：
 
@@ -84,7 +84,6 @@ https://github.com/user-attachments/assets/8100fd07-46cd-4f16-9228-90a09075ac54
 touch cache.db && echo '{"sites":[]}' > db.json && mkdir -p cache/images
 
 docker run -d --name donggua-tv --restart unless-stopped -p 3000:3000 \
-  -e TMDB_API_KEY="your_api_key" \
   -e CACHE_TYPE=sqlite \
   -e ACCESS_PASSWORD="main_pw,user1_pw,user2_pw" \
   -e ADMIN_TOKEN="a_long_random_string" \
@@ -94,6 +93,10 @@ docker run -d --name donggua-tv --restart unless-stopped -p 3000:3000 \
   -v $(pwd)/cache/images:/app/public/cache/images \
   ednovas/dongguatv:latest
 ```
+
+> 豆瓣首页版需要从本仓库构建镜像：`docker build -t donggua-tv:douban .`；Docker Hub 上的 `ednovas/dongguatv:latest` 是否包含本次改动取决于上游构建时间。
+>
+> `CORS_PROXY_URL` 是可选配置。不配置时资源站 API 会从服务器 IP 直连（国内部署通常更快），但边缘去广告和 http 直播源会降级；播放本身不受影响。
 
 <details>
 <summary>Docker Compose / 本地构建</summary>
@@ -105,7 +108,6 @@ services:
     container_name: donggua-tv
     ports: ["3000:3000"]
     environment:
-      - TMDB_API_KEY=your_api_key
       - CACHE_TYPE=sqlite
       - ACCESS_PASSWORD=main_pw,user1_pw
       - ADMIN_TOKEN=a_long_random_string
@@ -137,7 +139,7 @@ curl -fsSL https://raw.githubusercontent.com/ednovas/dongguaTV/main/install.sh |
 ```bash
 git clone https://github.com/ednovas/dongguaTV.git && cd dongguaTV
 npm install                          # 没有预编译包时需要 build-essential python3 编译 better-sqlite3
-cp .env.example .env && nano .env    # 至少填 TMDB_API_KEY
+cp .env.example .env && nano .env    # 按需填 ACCESS_PASSWORD / DANMU_API_URL 等；TMDB 可选
 node server.js                       # 或 pm2 start server.js --name donggua-tv && pm2 save && pm2 startup
 ```
 
@@ -147,7 +149,7 @@ node server.js                       # 或 pm2 start server.js --name donggua-tv
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fednovas%2FdongguaTV&env=TMDB_API_KEY,SITES_JSON,REMOTE_DB_URL,ACCESS_PASSWORD,TMDB_PROXY_URL&envDescription=TMDB_API_KEY%20is%20required.%20Use%20SITES_JSON%20(Base64)%20or%20REMOTE_DB_URL%20for%20site%20config.&envLink=https%3A%2F%2Fgithub.com%2Fednovas%2FdongguaTV%23vercel)
 
-在 Settings → Environment Variables 填 `TMDB_API_KEY`，以及 `SITES_JSON`（JSON 或 Base64 的 db.json 内容，推荐）或 `REMOTE_DB_URL`。改完变量要 **Redeploy**。
+在 Settings → Environment Variables 填 `SITES_JSON`（JSON 或 Base64 的 db.json 内容，推荐）或 `REMOTE_DB_URL`。`TMDB_API_KEY` 是可选项（首页默认豆瓣）；改完变量要 **Redeploy**。
 
 <a id="vercel"></a>**Vercel 的限制**（Serverless 无状态，只跑 `api/index.js`）：
 
@@ -160,13 +162,13 @@ node server.js                       # 或 pm2 start server.js --name donggua-tv
 
 ### 3. 环境变量
 
-只有 `TMDB_API_KEY` 必填。
+默认不需要 TMDB。`TMDB_API_KEY` 是可选项：配置后启用 TMDB 详情/分享增强；不配置时首页/榜单使用豆瓣，搜索和播放不受影响。
 
 **基础**
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `TMDB_API_KEY` | — | **必填**。TMDb v3 Key |
+| `TMDB_API_KEY` | — | **可选**。首页默认豆瓣；填了才启用 TMDB 详情/分享等增强 |
 | `PORT` | `3000` | 监听端口 |
 | `CACHE_TYPE` | `json` | `sqlite`（推荐，同步/求片/后台/统计都要它）/ `json` / `memory` / `none`。SQLite 起不来时会自动退回 `memory` |
 | `ACCESS_PASSWORD` | — | 访问密码。逗号分隔多个 = 多用户：**第 1 个是共用的"主密码"（不同步）**，其余每个是一个独立用户（历史/设置跨设备同步）。登录可选"记住 1 年" |

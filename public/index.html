@@ -4892,7 +4892,7 @@
             <div class="search-box-wrapper" :class="{ 'compact': !offHome && pastCompactThreshold }">
                 <i class="fas fa-search search-icon" @click="submitSearch(true)"></i>
                 <input type="text" v-model="keyword" @keyup.enter="submitSearch(true)" @input="debouncedSearch"
-                    class="search-input" placeholder="输入片名或分类（如 泰剧、韩综）">
+                    class="search-input" placeholder="输入片名或分类（如 电影、美剧、动漫）">
             </div>
         </div>
 
@@ -5498,7 +5498,7 @@
                 </div>
             </div>
             <div style="font-size:10px; margin-top:10px; opacity:0.5; user-select: none;">
-                Data provided by TMDb & Maccms APIs
+                Data provided by Douban & Maccms APIs
             </div>
         </div>
 
@@ -5644,7 +5644,7 @@
             </div>
         </div>
 
-        <!-- ★★★ TMDb 电影详情弹窗 ★★★ -->
+        <!-- ★★★ 影视详情弹窗（豆瓣 / TMDB 可选） ★★★ -->
         <!-- 📮 求片弹窗 -->
         <div class="info-modal-overlay" v-if="showRequestModal" @click.self="showRequestModal = false">
             <div class="info-modal req-modal">
@@ -5766,11 +5766,11 @@
             <div class="info-modal">
                 <button class="info-modal-close" @click="showInfoModal = false"><i class="fas fa-times"></i></button>
                 <div class="info-modal-backdrop"
-                    :style="{ backgroundImage: infoModalData ? 'url(' + TMDB_BACKDROP_URL + infoModalData.backdrop_path + ')' : '' }">
+                    :style="{ backgroundImage: infoModalData ? 'url(' + backdropUrl(infoModalData) + ')' : '' }">
                 </div>
                 <div class="info-modal-content" v-if="infoModalData">
                     <div class="info-modal-poster">
-                        <img :src="TMDB_IMG_URL + infoModalData.poster_path"
+                        <img :src="posterUrl(infoModalData)"
                             :alt="infoModalData.title || infoModalData.name">
                     </div>
                     <div class="info-modal-details">
@@ -9132,420 +9132,133 @@
         //   · 成人过滤只排除 softcore / erotic movie / pink film / hentai / sexploitation 这几个关键词:adult animation、pornography、
         //     ecchi、erotic 也打在《辛普森一家》《出租车司机》《无职转生》这些正经作品上
         // <dg-catalog-core>
+        // 豆瓣分类目录（简化版）：保留原 DgCatalog 的公共方法，数据源改为豆瓣标签。
+        //   scripts/catalog-test.mjs 按这对标记把整段抽出来在 node 里跑，段内只用参数，不碰页面变量/DOM/网络。
         const DgCatalog = (() => {
-            const NSFW_KW = '155477|190370|159551|198385|10053';
-            // 片名黑名单只管 200 票以下的(擦边片都是几票到几十票;《性爱自修室》八千多票)
             const NSFW_TITLE = /玉蒲团|蜜桃成熟|色欲|淫|情色|艳情|春宫|三级片|性爱|乱伦|走肾|裸体|恋欲|小姨子|嫂子的|继母的|姐姐的朋友|妈妈的朋友|朋友的(妈妈|母亲|姐姐|妹妹|妻子|老婆)|(年轻|漂亮|性感)的(妈妈|母亲|妻子|嫂子|阿姨|姐姐|妹妹)|拷问部/;
-            const NSFW_TITLE_MAX_VOTES = 200;
-            const TV_EX = '16,10764,10767,99,10763,10762';   // 剧集里去掉 动画 / 真人秀 / 脱口秀 / 纪录 / 新闻 / 儿童(各归各的大类)
-            const ZH = 'CN|HK|TW';
-            const EU = 'FR|DE|ES|IT|SE|DK|NO|BE|NL|PL|IE|PT|FI|AT|CH';
-            const ASIA_VC = { hot: 10, new: 3, top: 50 };   // 华语 / 日韩电影的票数门槛
-            // 末尾几个 3xxxxx 是 TMDB 上的中文关键词(谍战剧 / 古装剧 / 仙侠剧 / 穿越…),国产剧不少只打了这些
-            const KW = {
-                romance: '9840', costume: '195013|295029|15060|319304|379597|384651|192772|347945|379699', xianxia: '234890|384653|347944',
-                wuxia: '184656|384653|379597|384651|366002|366003', spy: '5265|470|220915|335028|309130|318771|364102', youth: '10683|6270|293194',
-                timeTravel: '4379|334003', medical: '208788', legal: '222517', school: '6270', isekai: '237451', mecha: '10046', disaster: '10617',
-                dating: '215119', cooking: '1918|10637|227635', travel: '9935|310315', music: '6383|8290|262705|251523',
-                nature: '18330|221355|9902', history: '282633|378429', food: '10637|307690|1918', science: '287067|325892|9882',
-                trueCrime: '33722|307587', biography: '5565',
-            };
-            const o = (k, l, q, extra) => Object.assign({ k, l, q: q || null }, extra || {});
-            const C = (code) => ({ with_origin_country: code });
-            const L = (code) => ({ with_original_language: code });   // TMDB 语言码:zh = 国语,cn = 粤语
-            // 大类:media = 默认接口;base = 固定参数;vc = 各排序的最低票数;sort = 默认排序(不写 = 最热)。
-            //   筛选组:k 进 sel、l 显示;all:false = 没有「全部」,第一个选项(k 为空)是默认。
-            //   选项:q = 默认接口的参数,m = 换到电影接口时的参数(动漫/纪录片选「电影」形式;不写就用 q);media = 选了它换接口;
-            //        dq = 别的选项没设这个键时才补上;vc = 自带的票数门槛,只降(各选项取最小),vcUp 只升(降完再取最大);
-            //        hidden = 只在被选中时出现(首页「日韩」那一行的「全部」)
-            //   nav = 首页分类栏这个大类下面的几行:g = 列出某组的全部选项,items = 自定的快捷标签 [显示名, sel]
+            const MOVIE_TAGS = ['热门', '最新', '豆瓣高分', '冷门佳片', '华语', '欧美', '韩国', '日本'];
+            const TV_TAGS = ['最近热门', '国产', '欧美', '日本', '韩国', '纪录片'];
+            const ANIME_TAGS = ['最近热门', '日本', '国产', '欧美'];
+            const VARIETY_TAGS = ['最近热门', '国内', '国外'];
+            const mk = (k, l, icon, media, tags) => ({
+                k, l, icon, media, tags,
+                groups: [{ k: 'tag', l: '标签', opts: tags.map(x => ({ k: x, l: x })) }],
+                nav: [{ l: '标签', g: 'tag' }],
+            });
             const TYPES = [
-                {
-                    k: 'movie', l: '电影', icon: 'fa-film', media: 'movie', base: {}, vc: { hot: 50, new: 10, top: 100 },
-                    groups: [
-                        { k: 'region', l: '地区', opts: [
-                            o('cn', '华语', C(ZH), { vc: ASIA_VC }), o('mainland', '内地', C('CN'), { vc: ASIA_VC }),
-                            o('hk', '香港', C('HK'), { vc: ASIA_VC }), o('tw', '台湾', C('TW'), { vc: ASIA_VC }),
-                            o('us', '美国', C('US')), o('kr', '韩国', C('KR'), { vc: ASIA_VC }), o('jp', '日本', C('JP'), { vc: ASIA_VC }),
-                            o('th', '泰国', C('TH'), { vc: { hot: 10, new: 3, top: 30 } }),
-                            o('gb', '英国', C('GB')), o('fr', '法国', C('FR')), o('eu', '欧洲', C(EU)), o('in', '印度', C('IN')),
-                        ] },
-                        { k: 'genre', l: '题材', opts: [
-                            o('action', '动作', { with_genres: '28' }), o('comedy', '喜剧', { with_genres: '35' }),
-                            o('romance', '爱情', { with_genres: '10749' }), o('scifi', '科幻', { with_genres: '878' }),
-                            o('fantasy', '奇幻', { with_genres: '14' }), o('mystery', '悬疑', { with_genres: '9648' }),
-                            o('thriller', '惊悚', { with_genres: '53' }), o('horror', '恐怖', { with_genres: '27' }),
-                            o('crime', '犯罪', { with_genres: '80' }), o('drama', '剧情', { with_genres: '18' }),
-                            o('war', '战争', { with_genres: '10752' }), o('history', '历史', { with_genres: '36' }),
-                            o('wuxia', '武侠', { with_keywords: KW.wuxia }, { vc: { hot: 10, top: 20 } }), o('animation', '动画', { with_genres: '16' }),
-                            o('family', '家庭', { with_genres: '10751' }), o('adventure', '冒险', { with_genres: '12' }),
-                            o('disaster', '灾难', { with_keywords: KW.disaster }), o('music', '音乐', { with_genres: '10402' }),
-                        ] },
-                        // 电影各语种中文译名都够(热门前 40 部 34~40 部有中文名);粤语片有一千多部(少林足球、花样年华、重庆森林…)
-                        { k: 'lang', l: '语言', opts: [
-                            o('zh', '国语', L('zh'), { vc: ASIA_VC }), o('cn', '粤语', L('cn'), { vc: ASIA_VC }), o('en', '英语', L('en')),
-                            o('ko', '韩语', L('ko'), { vc: ASIA_VC }), o('ja', '日语', L('ja'), { vc: ASIA_VC }),
-                            o('th', '泰语', L('th'), { vc: { hot: 10, new: 3, top: 30 } }), o('fr', '法语', L('fr')), o('es', '西班牙语', L('es')),
-                            o('hi', '印地语', L('hi')), o('de', '德语', L('de')),
-                        ] },
-                    ],
-                    nav: [{ l: '地区', g: 'region' }, { l: '题材', g: 'genre' }],
-                },
-                {
-                    k: 'tv', l: '剧集', icon: 'fa-tv', media: 'tv', base: { without_genres: TV_EX }, vc: { hot: 1, new: 1, top: 15 },
-                    groups: [
-                        { k: 'region', l: '地区', opts: [
-                            o('cn', '国产', C('CN')), o('hk', '港剧', C('HK'), { vc: { top: 5 } }), o('tw', '台剧', C('TW')),
-                            o('kr', '韩剧', C('KR')), o('jp', '日剧', C('JP')), o('th', '泰剧', C('TH')),
-                            o('us', '美剧', C('US')), o('gb', '英剧', C('GB')), o('eu', '欧洲', C(EU)),
-                            o('krjp', '日韩', C('KR|JP'), { hidden: true }),
-                        ] },
-                        { k: 'genre', l: '题材', opts: [
-                            o('mystery', '悬疑', { with_genres: '9648' }), o('crime', '犯罪', { with_genres: '80' }),
-                            o('romance', '爱情', { with_keywords: KW.romance }), o('comedy', '喜剧', { with_genres: '35' }),
-                            o('costume', '古装', { with_keywords: KW.costume }, { dq: C(ZH), vc: { top: 8 } }),
-                            o('xianxia', '仙侠', { with_keywords: KW.xianxia }, { vc: { top: 5 } }),
-                            o('wuxia', '武侠', { with_keywords: KW.wuxia }, { vc: { top: 5 } }),
-                            o('spy', '谍战', { with_keywords: KW.spy }, { dq: C(ZH), vc: { top: 3 } }),
-                            o('youth', '青春', { with_keywords: KW.youth }, { dq: C(ZH) }), o('scifi', '科幻', { with_genres: '10765' }),
-                            o('action', '动作', { with_genres: '10759' }), o('timetravel', '穿越', { with_keywords: KW.timeTravel }),
-                            o('war', '战争', { with_genres: '10768' }), o('family', '家庭', { with_genres: '10751' }),
-                            o('medical', '医疗', { with_keywords: KW.medical }), o('legal', '律政', { with_keywords: KW.legal }),
-                        ] },
-                        // 剧集只放中文译名够的语种:法语/德语/俄语/印地语剧热门前 40 部只有 6~16 部有中文名
-                        { k: 'lang', l: '语言', opts: [
-                            o('zh', '国语', L('zh')), o('cn', '粤语', L('cn'), { vc: { top: 5 } }), o('en', '英语', L('en')),
-                            o('ko', '韩语', L('ko')), o('ja', '日语', L('ja')), o('th', '泰语', L('th')),
-                        ] },
-                    ],
-                    nav: [{ l: '地区', g: 'region' }, { l: '题材', g: 'genre' }],
-                },
-                {
-                    k: 'anime', l: '动漫', icon: 'fa-dragon', media: 'tv', base: { with_genres: '16' }, vc: { hot: 1, new: 1, top: 20 },
-                    groups: [
-                        { k: 'region', l: '地区', opts: [
-                            o('jp', '日本', C('JP')), o('cn', '国产', C('CN'), { vc: { top: 10 } }),
-                            o('west', '欧美', C('US|GB|FR|CA')), o('kr', '韩国', C('KR'), { vc: { top: 5 } }),
-                        ] },
-                        { k: 'form', l: '形式', all: false, opts: [o('', 'TV动画'), o('movie', '动画电影', null, { media: 'movie' })] },
-                        { k: 'genre', l: '题材', opts: [
-                            o('action', '热血', { with_genres: '10759' }, { m: { with_genres: '28' } }),
-                            o('fantasy', '奇幻', { with_genres: '10765' }, { m: { with_genres: '14' } }),
-                            o('comedy', '搞笑', { with_genres: '35' }),
-                            o('romance', '恋爱', { with_keywords: KW.romance }, { m: { with_genres: '10749' } }),
-                            o('school', '校园', { with_keywords: KW.school }), o('isekai', '异世界', { with_keywords: KW.isekai }),
-                            o('mystery', '悬疑', { with_genres: '9648' }), o('mecha', '机甲', { with_keywords: KW.mecha }),
-                            o('kids', '亲子', { with_genres: '10762' }, { m: { with_genres: '10751' } }),
-                        ] },
-                    ],
-                    nav: [
-                        { l: '分类', items: [['日本番剧', { region: 'jp' }], ['国漫', { region: 'cn' }], ['欧美动画', { region: 'west' }], ['动画电影', { form: 'movie' }]] },
-                        { l: '题材', g: 'genre' },
-                    ],
-                },
-                {
-                    k: 'variety', l: '综艺', icon: 'fa-microphone-lines', media: 'tv', base: { with_genres: '10764|10767' }, vc: { hot: 0, new: 0, top: 5 },
-                    groups: [
-                        { k: 'region', l: '地区', opts: [
-                            o('cn', '内地', C('CN'), { vc: { top: 3 } }), o('kr', '韩综', C('KR')), o('jp', '日综', C('JP'), { vc: { top: 2 } }),
-                            o('tw', '台综', C('TW'), { vc: { top: 2 } }), o('west', '欧美', C('US|GB')),
-                        ] },
-                        { k: 'genre', l: '类型', opts: [
-                            o('reality', '真人秀', { '!with_genres': '10764' }), o('talk', '脱口秀', { '!with_genres': '10767' }),
-                            o('dating', '恋爱', { with_keywords: KW.dating }), o('cooking', '美食', { with_keywords: KW.cooking }),
-                            o('travel', '旅行', { with_keywords: KW.travel }), o('music', '音乐', { with_keywords: KW.music }),
-                        ] },
-                    ],
-                    nav: [{ l: '地区', g: 'region' }, { l: '类型', g: 'genre' }],
-                },
-                {
-                    // 纪录片默认看「高分」:按热度排前面是《20/20》《前线》这类欧美新闻杂志,高分才是《地球脉动》《蓝色星球》
-                    k: 'doc', l: '纪录片', icon: 'fa-earth-asia', media: 'tv', base: { with_genres: '99' }, vc: { hot: 10, new: 3, top: 20 }, sort: 'top',
-                    groups: [
-                        { k: 'form', l: '形式', all: false, opts: [o('', '系列'), o('movie', '电影', null, { media: 'movie', m: { without_genres: '10402' }, vcUp: { top: 20 } })] },
-                        { k: 'region', l: '地区', opts: [
-                            o('cn', '国产', C(ZH), { vc: { hot: 1, new: 0, top: 3 } }), o('gb', '英国', C('GB')),
-                            o('us', '美国', C('US')), o('jp', '日本', C('JP'), { vc: { hot: 1, new: 0, top: 3 } }),
-                        ] },
-                        { k: 'genre', l: '题材', opts: [
-                            o('nature', '自然', { with_keywords: KW.nature }), o('history', '历史', { with_keywords: KW.history }, { m: { with_genres: '36' } }),
-                            o('food', '美食', { with_keywords: KW.food }, { vc: { top: 5 } }), o('science', '科学', { with_keywords: KW.science }),
-                            o('crime', '罪案', { with_keywords: KW.trueCrime }), o('people', '人物', { with_keywords: KW.biography }),
-                        ] },
-                    ],
-                    nav: [
-                        { l: '分类', items: [['国产', { region: 'cn' }], ['BBC · 英国', { region: 'gb' }], ['美国', { region: 'us' }], ['日本', { region: 'jp' }], ['纪录电影', { form: 'movie' }]] },
-                        { l: '题材', g: 'genre' },
-                    ],
-                },
+                mk('movie', '电影', 'fa-film', 'movie', MOVIE_TAGS),
+                mk('tv', '剧集', 'fa-tv', 'tv', TV_TAGS),
+                mk('anime', '动漫', 'fa-dragon', 'tv', ANIME_TAGS),
+                mk('variety', '综艺', 'fa-microphone-alt', 'tv', VARIETY_TAGS),
             ];
-            const SORTS = [{ k: 'hot', l: '最热' }, { k: 'new', l: '最新' }, { k: 'top', l: '高分' }];
             const typeOf = (k) => TYPES.find(t => t.k === k) || null;
-            const optOf = (g, k) => g.opts.find(x => x.k === k) || null;
-            const asDate = (now) => (now instanceof Date ? now : new Date(now == null ? Date.now() : now));
-            const isoDay = (now) => { const d = asDate(now); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
-
-            // 年份:今年起往前 7 年逐年,再往前按年代(年代接在逐年的前一年为止),1990 年以前算「更早」
-            function yearOpts(now) {
-                const y = asDate(now).getFullYear(), out = [];
-                for (let i = 0; i < 7; i++) out.push({ k: String(y - i), l: String(y - i) });
-                for (let d = Math.floor((y - 7) / 10) * 10; d >= 1990; d -= 10) out.push({ k: d + 's', l: (d === 1990 ? '90' : d) + '年代' });
-                out.push({ k: 'old', l: '更早' });
-                return out;
+            function normSel(tk, sel) {
+                const T = typeOf(tk) || TYPES[0];
+                const tag = String((sel && sel.tag) || '');
+                return { tag: T.tags.includes(tag) ? tag : '' };
             }
-            function yearKeyOf(y, now) {
-                const cur = asDate(now).getFullYear();
-                if (y > cur) return null;
-                if (y > cur - 7) return String(y);
-                if (y < 1990) return 'old';
-                return Math.floor(y / 10) * 10 + 's';
-            }
-            function yearRange(k, now) {
-                if (/^\d{4}$/.test(k || '')) return { gte: k + '-01-01', lte: k + '-12-31' };
-                const m = /^(\d{4})s$/.exec(k || '');
-                if (m) return { gte: m[1] + '-01-01', lte: Math.min(+m[1] + 9, asDate(now).getFullYear() - 7) + '-12-31' };
-                if (k === 'old') return { lte: '1989-12-31' };
-                return null;
-            }
-            // 补齐成完整的 sel(每组一个键 + year + sort),认不得的值归「全部」/默认
-            function normSel(tk, sel, now) {
-                const T = typeOf(tk) || TYPES[1], s = sel || {}, out = {};
-                for (const g of T.groups) {
-                    const v = s[g.k] == null ? '' : String(s[g.k]);
-                    out[g.k] = (v === '' || optOf(g, v)) ? v : '';
+            // 豆瓣 query：电影走 j/search_subjects 的 tag；剧集/动漫/综艺走 recent_hot 的 category/type
+            function queryFor(tk, tag) {
+                const T = typeOf(tk) || TYPES[0];
+                if (T.k === 'movie') return { mode: 'tag', kind: 'movie', tag: tag || '热门' };
+                if (T.k === 'tv') {
+                    const map = {
+                        '最近热门': ['最近热门', '全部'],
+                        '国产': ['热门', 'tv_domestic'],
+                        '欧美': ['热门', 'tv_american'],
+                        '日本': ['热门', 'tv_japanese'],
+                        '韩国': ['热门', 'tv_korean'],
+                        '纪录片': ['热门', 'tv_documentary'],
+                    };
+                    const v = map[tag] || ['最近热门', '全部'];
+                    return { mode: 'recent', kind: 'tv', category: v[0], type: v[1] };
                 }
-                const y = s.year == null ? '' : String(s.year);
-                out.year = y && yearOpts(now).some(x => x.k === y) ? y : '';
-                out.sort = SORTS.some(x => x.k === s.sort) ? s.sort : (T.sort || 'hot');
-                return out;
-            }
-            function mediaOf(T, s) {
-                for (const g of T.groups) { const x = optOf(g, s[g.k]); if (x && x.media) return x.media; }
-                return T.media;
-            }
-            // with_genres / with_keywords / without_genres 与已有值是"且"(逗号),without_keywords 是"或"(竖线);键名前带 ! = 覆盖
-            const JOIN = { with_genres: ',', with_keywords: ',', without_genres: ',', without_keywords: '|' };
-            function mergeQ(dst, src) {
-                for (const key of Object.keys(src || {})) {
-                    const v = src[key];
-                    if (key[0] === '!') { dst[key.slice(1)] = v; continue; }
-                    dst[key] = (dst[key] != null && dst[key] !== '' && JOIN[key]) ? dst[key] + JOIN[key] + v : v;
+                if (T.k === 'anime') {
+                    return { mode: 'recent', kind: 'tv', category: '最近热门', type: 'tv_animation' };
                 }
-                return dst;
+                return { mode: 'recent', kind: 'tv', category: '热门', type: '综艺' };
             }
-            // → { path: '/discover/tv', media, params }(params 直接拼进 /api/tmdb-proxy 的查询串)
-            function buildQuery(tk, sel, page, opt) {
-                const op = opt || {}, T = typeOf(tk) || TYPES[1];
-                const s = normSel(T.k, sel, op.now), media = mediaOf(T, s);
-                const q = mergeQ({}, T.base), dq = {}, vc = Object.assign({}, T.vc), up = {};
-                for (const g of T.groups) {
-                    const x = optOf(g, s[g.k]);
-                    if (!x) continue;
-                    mergeQ(q, (media !== T.media && x.m) ? x.m : x.q);
-                    Object.assign(dq, x.dq);
-                    for (const k of Object.keys(x.vc || {})) vc[k] = Math.min(vc[k], x.vc[k]);
-                    for (const k of Object.keys(x.vcUp || {})) up[k] = Math.max(up[k] || 0, x.vcUp[k]);
-                }
-                for (const k of Object.keys(up)) vc[k] = Math.max(vc[k], up[k]);
-                for (const k of Object.keys(dq)) if (q[k] == null) q[k] = dq[k];
-                const dk = media === 'movie' ? 'primary_release_date' : 'first_air_date';
-                const yr = yearRange(s.year, op.now);
-                if (yr && yr.gte) q[dk + '.gte'] = yr.gte;
-                if (yr && yr.lte) q[dk + '.lte'] = yr.lte;
-                if (s.sort === 'new') {
-                    const today = isoDay(op.now);   // 「最新」不要还没播的(资源站不会有)
-                    if (!q[dk + '.lte'] || q[dk + '.lte'] > today) q[dk + '.lte'] = today;
-                    q.sort_by = dk + '.desc';
-                } else q.sort_by = s.sort === 'top' ? 'vote_average.desc' : 'popularity.desc';
-                if (vc[s.sort] > 0) q['vote_count.gte'] = vc[s.sort];
-                if (op.nsfw) { q.include_adult = 'false'; mergeQ(q, { without_keywords: NSFW_KW }); }
-                q.page = Math.max(1, Math.min(500, parseInt(page, 10) || 1));
-                return { path: '/discover/' + media, media, params: q };
+            function buildQuery(tk, sel, page) {
+                const T = typeOf(tk) || TYPES[0];
+                const s = normSel(T.k, sel);
+                const p = Math.max(1, Math.min(50, parseInt(page, 10) || 1));
+                return Object.assign({}, queryFor(T.k, s.tag), { page: p, start: (p - 1) * 20, limit: 20 });
             }
-            const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/;
-            // 西里尔 / 希伯来 / 阿拉伯 / 印度诸文字 / 泰文 / 谚文 / 假名(不含 ・ ー:中文译名里也用,如「哈利・波特」)
-            const OTHER_SCRIPT = /[\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0900-\u0dff\u0e00-\u0e7f\u1100-\u11ff\u3040-\u30fa\u30fd-\u30ff\u31f0-\u31ff\uac00-\ud7af]/;
-            // 浏览页里显示不显示:没海报的不显示;名字是泰文/韩文/假名…(TMDB 没有中文译名)或非英语的外文原名 → 资源站按中文名上架,点了也搜不到
             function visible(it, nsfw) {
                 if (!it || !it.poster_path) return false;
                 const name = String(it.title || it.name || '').trim();
-                if (!name || OTHER_SCRIPT.test(name)) return false;
-                if (!HAN.test(name) && it.original_language !== 'en' && name === String(it.original_title || it.original_name || '').trim()) return false;
-                return !(nsfw && (it.vote_count || 0) < NSFW_TITLE_MAX_VOTES && NSFW_TITLE.test(name));
+                if (!name) return false;
+                if (nsfw && NSFW_TITLE.test(name)) return false;
+                return true;
             }
-            // 浏览页的筛选行(每组前面加「全部」,再加年份、排序)
-            function groupsOf(tk, sel, now) {
+            function groupsOf(tk, sel) {
                 const T = typeOf(tk);
                 if (!T) return [];
-                const s = normSel(tk, sel, now);
-                const rows = T.groups.map(g => ({
-                    k: g.k, l: g.l,
-                    opts: (g.all === false ? [] : [{ k: '', l: '全部' }]).concat(g.opts.filter(x => !x.hidden || x.k === s[g.k]).map(x => ({ k: x.k, l: x.l }))),
-                }));
-                rows.push({ k: 'year', l: '年份', opts: [{ k: '', l: '全部' }].concat(yearOpts(now)) });
-                rows.push({ k: 'sort', l: '排序', opts: SORTS.slice() });
-                return rows;
+                const s = normSel(tk, sel);
+                return [{ k: 'tag', l: '标签', opts: [{ k: '', l: '全部' }].concat(T.tags.map(x => ({ k: x, l: x, active: s.tag === x }))) }];
             }
-            // 首页分类栏:选中大类下面那几行快捷标签 [{ l, items: [{ l, sel }] }]
             function navRows(tk) {
                 const T = typeOf(tk);
                 if (!T) return [];
-                return T.nav.map(n => ({
-                    l: n.l,
-                    items: n.items
-                        ? n.items.map(([l, sel]) => ({ l, sel }))
-                        : ((T.groups.find(g => g.k === n.g) || { opts: [] }).opts.filter(x => !x.hidden).map(x => ({ l: x.l, sel: { [n.g]: x.k } }))),
-                }));
+                return [{ l: '标签', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }];
             }
             function title(tk, sel) {
                 const T = typeOf(tk);
                 if (!T) return '';
-                const s = normSel(tk, sel), parts = [T.l];
-                for (const g of T.groups) { const x = optOf(g, s[g.k]); if (x && x.k) parts.push(x.l); }
-                return parts.join(' · ');
+                const s = normSel(tk, sel);
+                return T.l + (s.tag ? ' · ' + s.tag : '');
             }
-            // 浏览页滚下去后顶上那条:标题 + 年份 + 排序
-            function summary(tk, sel, now) {
-                const T = typeOf(tk);
-                if (!T) return '';
-                const s = normSel(tk, sel, now), parts = [title(tk, s)];
-                const y = yearOpts(now).find(x => x.k === s.year);
-                if (y) parts.push(y.l);
-                parts.push(SORTS.find(x => x.k === s.sort).l);
-                return parts.join(' · ');
-            }
+            function summary(tk, sel) { return title(tk, sel); }
             const countLabel = (n) => (n >= 10000 ? Math.floor(n / 10000) + '万+' : String(n || 0));
-
-            // 「分类大全」页(首页「全部分类」进来):热门入口大色块 + 每个大类一张卡片(各筛选组 + 年份),每一项都是一个浏览页预设
             const HOT = [
-                ['国产剧', 'tv', { region: 'cn' }, 'fa-dragon', '#e52d27', '#9b1b30'],
-                ['韩剧', 'tv', { region: 'kr' }, 'fa-heart', '#d6457a', '#7b2ff7'],
-                ['泰剧', 'tv', { region: 'th' }, 'fa-sun', '#f7971e', '#c2410c'],
-                ['美剧', 'tv', { region: 'us' }, 'fa-flag-usa', '#2b5cff', '#1e3a8a'],
-                ['日剧', 'tv', { region: 'jp' }, 'fa-torii-gate', '#8e54e9', '#4776e6'],
-                ['港剧', 'tv', { region: 'hk' }, 'fa-city', '#c2306a', '#6d214f'],
-                ['台剧', 'tv', { region: 'tw' }, 'fa-mug-hot', '#11998e', '#185a9d'],
-                ['英剧', 'tv', { region: 'gb' }, 'fa-crown', '#5f72bd', '#4a2c7a'],
-                ['日本番剧', 'anime', { region: 'jp' }, 'fa-ghost', '#ee5a9e', '#9b2fae'],
-                ['国漫', 'anime', { region: 'cn' }, 'fa-yin-yang', '#e67e22', '#a0402a'],
-                ['华语电影', 'movie', { region: 'cn' }, 'fa-film', '#b31217', '#5c0a0f'],
-                ['好莱坞大片', 'movie', { region: 'us' }, 'fa-star', '#1d6fa5', '#163a6b'],
-                ['粤语经典', 'movie', { lang: 'cn', sort: 'top' }, 'fa-landmark', '#a8763e', '#5b3a29'],
-                ['韩综', 'variety', { region: 'kr' }, 'fa-microphone-lines', '#e0437c', '#8e2a62'],
-                ['内地综艺', 'variety', { region: 'cn' }, 'fa-masks-theater', '#f0592a', '#a3301b'],
-                ['BBC纪录片', 'doc', { region: 'gb' }, 'fa-earth-asia', '#178a6b', '#0f4c45'],
+                ['热门电影', 'movie', { tag: '热门' }, 'fa-film', '#b31217', '#5c0a0f'],
+                ['豆瓣高分', 'movie', { tag: '豆瓣高分' }, 'fa-star', '#1d6fa5', '#163a6b'],
+                ['最近热门剧集', 'tv', { tag: '最近热门' }, 'fa-tv', '#2b5cff', '#1e3a8a'],
+                ['国产剧', 'tv', { tag: '国产' }, 'fa-dragon', '#e52d27', '#9b1b30'],
+                ['美剧', 'tv', { tag: '欧美' }, 'fa-flag-usa', '#2b5cff', '#1e3a8a'],
+                ['韩剧', 'tv', { tag: '韩国' }, 'fa-heart', '#d6457a', '#7b2ff7'],
+                ['日剧', 'tv', { tag: '日本' }, 'fa-mask', '#8e54e9', '#4776e6'],
+                ['动漫', 'anime', { tag: '最近热门' }, 'fa-ghost', '#ee5a9e', '#9b2fae'],
+                ['综艺', 'variety', { tag: '最近热门' }, 'fa-microphone-alt', '#f0592a', '#a3301b'],
+                ['纪录片', 'tv', { tag: '纪录片' }, 'fa-video', '#178a6b', '#0f4c45'],
             ];
-            function directory(now) {
+            function directory() {
                 return {
                     hot: HOT.map(([l, type, sel, icon, c1, c2]) => ({ l, type, sel, icon, bg: 'linear-gradient(135deg, ' + c1 + ', ' + c2 + ')' })),
                     types: TYPES.map(T => ({
                         k: T.k, l: T.l, icon: T.icon,
-                        rows: T.groups.map(g => ({ l: g.l, items: g.opts.filter(x => !x.hidden).map(x => ({ l: x.l, sel: { [g.k]: x.k } })) }))
-                            .concat([{ l: '年份', items: yearOpts(now).map(y => ({ l: y.l, sel: { year: y.k } })) }]),
+                        rows: [{ l: '标签', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }],
                     })),
                 };
             }
-
-            // 搜索框里的分类词 → 浏览页预设。整词匹配(忽略空格、大小写),可带「2024(年)」「最新/热门/高分」前缀和「推荐/大全/排行榜」后缀。
-            //   有正经作品正好叫这个名字的词不收(好莱坞 / 真人秀 / 影片);剩下的同名作品都是零票冷门,浏览页上有「按片名搜索」
-            const ALIAS = {};
-            const add = (words, type, sel) => words.split(' ').forEach(w => { ALIAS[w] = { type, sel: sel || {} }; });
-            add('电视剧 剧集 连续剧', 'tv');
-            add('国产剧 国剧 大陆剧 内地剧 华语剧 国产电视剧', 'tv', { region: 'cn' });
-            add('港剧 香港剧 香港电视剧 tvb tvb剧', 'tv', { region: 'hk' });
-            add('台剧 台湾剧 台湾电视剧', 'tv', { region: 'tw' });
-            add('韩剧 韩国剧 韩国电视剧', 'tv', { region: 'kr' });
-            add('日剧 日本剧 日本电视剧', 'tv', { region: 'jp' });
-            add('泰剧 泰国剧 泰国电视剧', 'tv', { region: 'th' });
-            add('美剧 美国剧 美国电视剧', 'tv', { region: 'us' });
-            add('英剧 英国剧 英国电视剧', 'tv', { region: 'gb' });
-            add('欧洲剧 欧剧', 'tv', { region: 'eu' });
-            add('日韩剧', 'tv', { region: 'krjp' });
-            add('悬疑剧', 'tv', { genre: 'mystery' }); add('犯罪剧 刑侦剧', 'tv', { genre: 'crime' });
-            add('爱情剧 言情剧', 'tv', { genre: 'romance' }); add('轻喜剧', 'tv', { genre: 'comedy' });
-            add('古装 古装剧', 'tv', { genre: 'costume' }); add('仙侠 仙侠剧', 'tv', { genre: 'xianxia' });
-            add('武侠剧', 'tv', { genre: 'wuxia' }); add('谍战 谍战剧', 'tv', { genre: 'spy' });
-            add('青春剧 校园剧', 'tv', { genre: 'youth' }); add('科幻剧', 'tv', { genre: 'scifi' });
-            add('穿越剧', 'tv', { genre: 'timetravel' }); add('战争剧 军旅剧', 'tv', { genre: 'war' });
-            add('家庭剧', 'tv', { genre: 'family' }); add('医疗剧 医务剧', 'tv', { genre: 'medical' }); add('律政剧', 'tv', { genre: 'legal' });
-            add('电影', 'movie');
-            add('华语电影 国产电影 中国电影', 'movie', { region: 'cn' }); add('内地电影 大陆电影', 'movie', { region: 'mainland' });
-            add('港片 香港电影', 'movie', { region: 'hk' }); add('台湾电影', 'movie', { region: 'tw' });
-            add('美国电影 好莱坞电影 美国大片 欧美电影 欧美大片', 'movie', { region: 'us' });
-            add('韩国电影 韩影', 'movie', { region: 'kr' }); add('日本电影 日影', 'movie', { region: 'jp' });
-            add('泰国电影 泰影', 'movie', { region: 'th' }); add('英国电影', 'movie', { region: 'gb' }); add('法国电影', 'movie', { region: 'fr' });
-            add('欧洲电影', 'movie', { region: 'eu' }); add('印度电影 宝莱坞', 'movie', { region: 'in' });
-            add('粤语片 粤语电影', 'movie', { lang: 'cn' }); add('粤语剧 粤语电视剧', 'tv', { lang: 'cn' });
-            add('动作片 动作电影', 'movie', { genre: 'action' }); add('喜剧片 喜剧电影', 'movie', { genre: 'comedy' });
-            add('爱情片 爱情电影', 'movie', { genre: 'romance' }); add('科幻片 科幻电影', 'movie', { genre: 'scifi' });
-            add('奇幻片 魔幻片 奇幻电影', 'movie', { genre: 'fantasy' }); add('悬疑片 悬疑电影', 'movie', { genre: 'mystery' });
-            add('惊悚片 惊悚电影', 'movie', { genre: 'thriller' }); add('恐怖片 恐怖电影 鬼片', 'movie', { genre: 'horror' });
-            add('犯罪片 犯罪电影', 'movie', { genre: 'crime' }); add('剧情片 文艺片', 'movie', { genre: 'drama' });
-            add('战争片 战争电影', 'movie', { genre: 'war' }); add('历史片', 'movie', { genre: 'history' });
-            add('武侠片 武侠电影', 'movie', { genre: 'wuxia' }); add('家庭片', 'movie', { genre: 'family' }); add('冒险片', 'movie', { genre: 'adventure' });
-            add('灾难片', 'movie', { genre: 'disaster' }); add('音乐片 歌舞片', 'movie', { genre: 'music' });
-            add('动漫 动画 番剧 新番 二次元 动画片', 'anime');
-            add('日漫 日本动漫 日本动画 日番 日本番剧', 'anime', { region: 'jp' });
-            add('国漫 国产动漫 国产动画 中国动漫 中国动画 国创', 'anime', { region: 'cn' });
-            add('美漫 欧美动漫 欧美动画 美国动画', 'anime', { region: 'west' });
-            add('动画电影 动漫电影 剧场版', 'anime', { form: 'movie' });
-            add('异世界 异世界番', 'anime', { genre: 'isekai' }); add('热血动漫 热血番', 'anime', { genre: 'action' }); add('机甲动画 机甲番', 'anime', { genre: 'mecha' });
-            add('综艺 综艺节目', 'variety');
-            add('国内综艺 内地综艺 大陆综艺 国产综艺 国综', 'variety', { region: 'cn' });
-            add('韩综 韩国综艺', 'variety', { region: 'kr' }); add('日综 日本综艺', 'variety', { region: 'jp' });
-            add('台综 台湾综艺', 'variety', { region: 'tw' }); add('欧美综艺 美国综艺 美综', 'variety', { region: 'west' });
-            add('真人秀节目', 'variety', { genre: 'reality' }); add('脱口秀', 'variety', { genre: 'talk' });
-            add('恋综 恋爱综艺 恋爱真人秀', 'variety', { genre: 'dating' }); add('美食综艺', 'variety', { genre: 'cooking' });
-            add('旅行综艺 旅游综艺', 'variety', { genre: 'travel' }); add('音乐综艺 选秀 选秀节目', 'variety', { genre: 'music' });
-            add('纪录片 记录片 纪实', 'doc');
-            add('国产纪录片 中国纪录片', 'doc', { region: 'cn' }); add('bbc bbc纪录片 英国纪录片', 'doc', { region: 'gb' });
-            add('美国纪录片', 'doc', { region: 'us' }); add('日本纪录片', 'doc', { region: 'jp' }); add('纪录电影', 'doc', { form: 'movie' });
-            add('自然纪录片', 'doc', { genre: 'nature' }); add('历史纪录片', 'doc', { genre: 'history' }); add('美食纪录片', 'doc', { genre: 'food' });
-            add('科学纪录片 科普纪录片', 'doc', { genre: 'science' }); add('罪案纪录片', 'doc', { genre: 'crime' });
-            const PRE = [[/^(最新|新上线的?|新)/, 'new'], [/^(热门|最热|好看的?|火爆)/, 'hot'], [/^(高分|经典|必看的?)/, 'top']];
-            const SUF = /(推荐|大全|排行榜?|榜单?|合集|列表|片单|在线看|在线观看|免费看|全集)$/;
-            function coreOf(t) {
-                if (ALIAS[t]) return t;
-                const m = SUF.exec(t);
-                return (m && ALIAS[t.slice(0, m.index)]) ? t.slice(0, m.index) : null;
-            }
-            // → { type, sel } 或 null(就按片名搜)
-            function fromSearch(kw, now) {
-                let s = String(kw || '').toLowerCase().replace(/[\s·・]+/g, '');
-                if (!s || s.length > 20) return null;
-                const sel = {};
-                const ym = /^((?:19|20)\d\d)年?的?/.exec(s);
-                if (ym && s.length > ym[0].length) {
-                    const yk = yearKeyOf(+ym[1], now);
-                    if (!yk) return null;
-                    sel.year = yk;
-                    s = s.slice(ym[0].length);
-                }
-                let core = coreOf(s);
-                if (!core) {
-                    for (const [re, sort] of PRE) {
-                        const m = re.exec(s);
-                        const c = m && coreOf(s.slice(m[0].length));
-                        if (c) { core = c; sel.sort = sort; break; }
-                    }
-                }
-                if (!core) return null;
-                const hit = ALIAS[core];
-                return { type: hit.type, sel: Object.assign({}, hit.sel, sel) };
-            }
-            // 首页各榜单标题旁的「全部」→ 浏览页预设(随机盲盒没有)
-            const ROWS = {
-                movieRow: ['movie', {}], tvRow: ['tv', {}], cnRow: ['tv', { region: 'cn' }], usRow: ['tv', { region: 'us' }], krjpRow: ['tv', { region: 'krjp' }],
-                animeRow: ['anime', {}], scifiRow: ['movie', { genre: 'scifi' }], actionRow: ['movie', { genre: 'action' }], comedyRow: ['movie', { genre: 'comedy' }],
-                crimeRow: ['movie', { genre: 'crime' }], romanceRow: ['movie', { genre: 'romance' }], familyRow: ['movie', { genre: 'family' }],
-                docRow: ['doc', { form: 'movie' }], warRow: ['movie', { genre: 'war' }], horrorRow: ['movie', { genre: 'horror' }],
-                mysteryRow: ['movie', { genre: 'mystery' }], fantasyRow: ['movie', { genre: 'fantasy' }], varietyRow: ['variety', {}], historyRow: ['movie', { genre: 'history' }],
+            const ALIAS = {
+                '电影': ['movie', {}], '电视剧': ['tv', {}], '剧集': ['tv', {}], '连续剧': ['tv', {}],
+                '国产剧': ['tv', { tag: '国产' }], '国剧': ['tv', { tag: '国产' }],
+                '美剧': ['tv', { tag: '欧美' }], '韩剧': ['tv', { tag: '韩国' }], '日剧': ['tv', { tag: '日本' }],
+                '纪录片': ['tv', { tag: '纪录片' }], '动漫': ['anime', {}], '动画': ['anime', {}], '番剧': ['anime', {}],
+                '综艺': ['variety', {}], '华语电影': ['movie', { tag: '华语' }], '欧美电影': ['movie', { tag: '欧美' }],
+                '韩国电影': ['movie', { tag: '韩国' }], '日本电影': ['movie', { tag: '日本' }],
+                '高分电影': ['movie', { tag: '豆瓣高分' }], '最新电影': ['movie', { tag: '最新' }],
             };
-            function rowPreset(key, sortMode) {
-                const r = ROWS[key];
-                return r ? { type: r[0], sel: Object.assign({ sort: sortMode === 'newest' ? 'new' : 'hot' }, r[1]) } : null;
+            function fromSearch(kw) {
+                const hit = ALIAS[String(kw || '').trim()];
+                return hit ? { type: hit[0], sel: Object.assign({}, hit[1]) } : null;
             }
-            return { TYPES, SORTS, NSFW_KW, typeOf, yearOpts, yearRange, normSel, buildQuery, visible, groupsOf, navRows, title, summary, countLabel, directory, fromSearch, rowPreset };
+            const ROWS = {
+                movieHot: ['movie', { tag: '热门' }], movieNew: ['movie', { tag: '最新' }],
+                movieTop: ['movie', { tag: '豆瓣高分' }], movieCold: ['movie', { tag: '冷门佳片' }],
+                movieCN: ['movie', { tag: '华语' }], movieUS: ['movie', { tag: '欧美' }],
+                movieKR: ['movie', { tag: '韩国' }], movieJP: ['movie', { tag: '日本' }],
+                tvHot: ['tv', { tag: '最近热门' }], tvCN: ['tv', { tag: '国产' }],
+                tvUS: ['tv', { tag: '欧美' }], tvJP: ['tv', { tag: '日本' }],
+                tvKR: ['tv', { tag: '韩国' }], tvDoc: ['tv', { tag: '纪录片' }],
+                tvAnime: ['anime', { tag: '最近热门' }], tvShow: ['variety', { tag: '最近热门' }],
+            };
+            function rowPreset(key) {
+                const r = ROWS[key];
+                return r ? { type: r[0], sel: Object.assign({}, r[1]) } : null;
+            }
+            return { TYPES, typeOf, normSel, buildQuery, visible, groupsOf, navRows, title, summary, countLabel, directory, fromSearch, rowPreset };
         })();
         // </dg-catalog-core>
 
@@ -9989,26 +9702,23 @@
                     viewPages: {}, // 存储各榜单展开时的查看页码 { movieRow: 1, ... }
                     pageLoadingKeys: {}, // 防止重复快速点击加载 { movieRow: true, ... }
                     rowConfigs: {
-                        randomRow: { title: '随机盲盒·惊喜呈现', icon: 'fa-random', path: 'MIXED', params: '', page: 1 },
-                        movieRow: { title: '全球震感·电影榜', icon: 'fa-film', path: '/trending/movie/week', params: '', page: 1 },
-                        tvRow: { title: '全球必追·剧集榜', icon: 'fa-tv', path: '/trending/tv/week', params: '', page: 1 },
-                        cnRow: { title: '华语强档·国产剧', icon: 'fa-dragon', path: '/discover/tv', params: 'with_origin_country=CN', page: 1, sortMode: 'newest' },
-                        usRow: { title: '美剧·高能剧集', icon: 'fa-flag-usa', path: '/discover/tv', params: 'with_origin_country=US', page: 1, sortMode: 'newest' },
-                        krjpRow: { title: '日韩潮流·剧集', icon: 'fa-mask', path: '/discover/tv', params: 'with_origin_country=KR|JP', page: 1, sortMode: 'newest' },
-                        animeRow: { title: '二次元·动漫番剧', icon: 'fa-ghost', path: '/discover/tv', params: 'with_genres=16', page: 1, sortMode: 'newest' },
-                        scifiRow: { title: '科幻奇幻·星际穿越', icon: 'fa-rocket', path: '/discover/movie', params: 'with_genres=878,14', page: 1, sortMode: 'newest' },
-                        actionRow: { title: '动作大片·肾上腺素', icon: 'fa-bomb', path: '/discover/movie', params: 'with_genres=28', page: 1, sortMode: 'newest' },
-                        comedyRow: { title: '开心喜剧·解压必备', icon: 'fa-laugh-squint', path: '/discover/movie', params: 'with_genres=35', page: 1, sortMode: 'newest' },
-                        crimeRow: { title: '犯罪悬疑·烧脑神作', icon: 'fa-user-secret', path: '/discover/movie', params: 'with_genres=80,9648', page: 1, sortMode: 'newest' },
-                        romanceRow: { title: '爱情·浪漫满屋', icon: 'fa-heart', path: '/discover/movie', params: 'with_genres=10749', page: 1, sortMode: 'newest' },
-                        familyRow: { title: '合家欢·温馨时刻', icon: 'fa-home', path: '/discover/movie', params: 'with_genres=10751', page: 1, sortMode: 'newest' },
-                        docRow: { title: '纪录片·探索世界', icon: 'fa-video', path: '/discover/movie', params: 'with_genres=99', page: 1, sortMode: 'newest' },
-                        warRow: { title: '战争·史诗巨制', icon: 'fa-fighter-jet', path: '/discover/movie', params: 'with_genres=10752', page: 1, sortMode: 'newest' },
-                        horrorRow: { title: '恐怖惊悚·胆小勿入', icon: 'fa-skull', path: '/discover/movie', params: 'with_genres=27', page: 1, sortMode: 'newest' },
-                        mysteryRow: { title: '烧脑悬疑·层层反转', icon: 'fa-search', path: '/discover/movie', params: 'with_genres=9648', page: 1, sortMode: 'newest' },
-                        fantasyRow: { title: '奇幻冒险·异想天开', icon: 'fa-hat-wizard', path: '/discover/movie', params: 'with_genres=14', page: 1, sortMode: 'newest' },
-                        varietyRow: { title: '热门综艺·娱乐生活', icon: 'fa-microphone-alt', path: '/discover/tv', params: 'with_genres=10764', page: 1, sortMode: 'newest' },
-                        historyRow: { title: '历史·岁月长河', icon: 'fa-landmark', path: '/discover/movie', params: 'with_genres=36', page: 1, sortMode: 'newest' },
+                        randomRow: { title: '随机盲盒·惊喜呈现', icon: 'fa-random', source: 'douban-random', page: 1 },
+                        movieHot: { title: '热门电影·豆瓣热榜', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '热门', page: 1 },
+                        movieNew: { title: '最新电影·新片速递', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '最新', page: 1 },
+                        movieTop: { title: '豆瓣高分·口碑佳作', icon: 'fa-star', source: 'douban-tag', kind: 'movie', tag: '豆瓣高分', page: 1 },
+                        movieCold: { title: '冷门佳片·遗珠之选', icon: 'fa-gem', source: 'douban-tag', kind: 'movie', tag: '冷门佳片', page: 1 },
+                        movieCN: { title: '华语电影·本土佳作', icon: 'fa-dragon', source: 'douban-tag', kind: 'movie', tag: '华语', page: 1 },
+                        movieUS: { title: '欧美电影·全球视野', icon: 'fa-flag-usa', source: 'douban-tag', kind: 'movie', tag: '欧美', page: 1 },
+                        movieKR: { title: '韩国电影·韩式风味', icon: 'fa-heart', source: 'douban-tag', kind: 'movie', tag: '韩国', page: 1 },
+                        movieJP: { title: '日本电影·日式美学', icon: 'fa-mask', source: 'douban-tag', kind: 'movie', tag: '日本', page: 1 },
+                        tvHot: { title: '最近热门·剧集', icon: 'fa-tv', source: 'douban-recent', kind: 'tv', category: '最近热门', type: '全部', page: 1 },
+                        tvCN: { title: '国产剧·华语剧集', icon: 'fa-dragon', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_domestic', page: 1 },
+                        tvUS: { title: '欧美剧·高能剧集', icon: 'fa-flag-usa', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_american', page: 1 },
+                        tvJP: { title: '日剧·日式故事', icon: 'fa-mask', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_japanese', page: 1 },
+                        tvKR: { title: '韩剧·韩流来袭', icon: 'fa-heart', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_korean', page: 1 },
+                        tvAnime: { title: '动漫·二次元番剧', icon: 'fa-ghost', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_animation', page: 1 },
+                        tvDoc: { title: '纪录片·探索世界', icon: 'fa-video', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_documentary', page: 1 },
+                        tvShow: { title: '综艺·娱乐生活', icon: 'fa-microphone-alt', source: 'douban-recent', kind: 'tv', category: '热门', type: '综艺', page: 1 },
                     },
 
                     movieList: [], tvList: [], list_cn: [], list_krjp: [],
@@ -10817,7 +10527,7 @@
                     }
 
                     // 2. 如果获取到了 Key，加载数据(试看时首页被播放页盖着,登录后再加载)
-                    if (TMDB_API_KEY && !trial) {
+                    if (!trial) {
                         updateStatus('正在加载首页内容...');
                         try {
                             // ⏱️ 最多等 6s:弱网时 Hero 慢到/拉不回来就先放行进应用(它完成后仍会自行填充),
@@ -10831,9 +10541,6 @@
                         } catch (e) {
                             console.error('[InitApp] Lists 加载失败:', e);
                         }
-                    } else if (!TMDB_API_KEY) {
-                        console.warn('TMDB_API_KEY 未配置');
-                        updateStatus('⚠️ API 未配置');
                     }
 
                     // 3. 移除 Loading 遮罩 (平滑过渡)
@@ -12337,28 +12044,31 @@
                     }
                     if (b.loading) return;
                     const seq = b.seq, page = b.page + 1;
-                    const q = DgCatalog.buildQuery(b.type, b.sel, page, { nsfw: this.filterNsfw });
-                    const qs = Object.keys(q.params).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(q.params[k])).join('&');
+                    const q = DgCatalog.buildQuery(b.type, b.sel, page);
+                    const params = 'start=' + encodeURIComponent(q.start) + '&limit=' + encodeURIComponent(q.limit);
+                    const api = q.mode === 'tag'
+                        ? '/api/douban/list?kind=' + encodeURIComponent(q.kind) + '&tag=' + encodeURIComponent(q.tag) + '&' + params
+                        : '/api/douban/recent?kind=' + encodeURIComponent(q.kind) + '&category=' + encodeURIComponent(q.category) + '&type=' + encodeURIComponent(q.type) + '&' + params;
                     const ctl = new AbortController();
                     this._browseCtl = ctl;
                     const timer = setTimeout(() => ctl.abort(), 15000);
                     b.loading = true;
                     try {
-                        const r = await tmdbFetch(`/api/tmdb-proxy?path=${encodeURIComponent(q.path)}&${qs}`, { signal: ctl.signal });
+                        const r = await fetch(api, { signal: ctl.signal });
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         const d = await r.json();
                         if (seq !== b.seq) return;
                         const seen = this._browseSeen || (this._browseSeen = new Set()), nsfw = this.filterNsfw;
-                        const fresh = (d.results || []).filter(it => {
+                        const fresh = (d.list || []).filter(it => {
                             if (!it || seen.has(it.id) || !DgCatalog.visible(it, nsfw)) return false;
                             seen.add(it.id);
                             return true;
                         }).map(it => Object.freeze(it));   // 只读展示:不做深层响应式(一页 20 张,翻多了上千个对象)
                         if (fresh.length) b.items.push(...fresh);
                         b.page = page;
-                        b.totalPages = Math.min(d.total_pages || 0, 500);
-                        b.total = d.total_results || 0;
-                        b.done = page >= b.totalPages;
+                        b.total = d.total || 0;
+                        b.totalPages = b.total ? Math.ceil(b.total / q.limit) : 0;
+                        b.done = (d.list || []).length < q.limit;
                         b.idle = fresh.length >= 4 ? 0 : b.idle + 1;   // 一页 20 条留下不到 4 条算"稀"(宽屏上撑不起底部,会一页接一页地自动拉)
                     } catch (e) {
                         if (seq === b.seq) b.error = true;
@@ -12443,9 +12153,20 @@
                     if (!path) {
                         return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='450'%3E%3Crect fill='%23333' width='300' height='450'/%3E%3Ctext fill='%23666' x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-size='20'%3ENo Image%3C/text%3E%3C/svg%3E";
                     }
-                    // 如果配置了本地缓存 URL，使用它 (注意去掉 size 部分因为已包含在 path 里? 不，path只是 /xxxx.jpg)
+                    // 豆瓣条目存的是完整代理地址（/api/douban-image?url=...），不能再拼 TMDB 前缀
+                    if (/^(https?:)?\/\//i.test(path) || path.startsWith('/api/') || path.startsWith('data:')) return path;
                     // TMDB_IMG_URL 格式可能是 "/api/tmdb-image/w342" 或 "https://image.tmdb.org/t/p/w342"
                     return this.TMDB_IMG_URL + path;
+                },
+                posterUrl(item, size = 'w300') {
+                    return this.getPosterUrl(item && (item.poster_path || item.poster), size);
+                },
+                backdropUrl(item) {
+                    if (!item) return '';
+                    const p = item.backdrop_path || item.backdrop || item.poster_path || item.poster || '';
+                    if (!p) return '';
+                    if (/^(https?:)?\/\//i.test(p) || p.startsWith('/api/') || p.startsWith('data:')) return p;
+                    return TMDB_BACKDROP_URL + p;
                 },
 
                 // 防抖搜索 - 输入时实时搜索
@@ -12471,6 +12192,30 @@
                 // 显示电影详情弹窗
                 showMovieInfo(item) {
                     if (!item) return;
+                    if (item._douban && item.id && !item._doubanDetail) {
+                        const base = Object.assign({}, item);
+                        this.infoModalData = base;
+                        this.showInfoModal = true;
+                        fetchT('/api/douban/detail?id=' + encodeURIComponent(item.id), {}, 10000)
+                            .then(r => r.ok ? r.json() : null)
+                            .then(d => {
+                                if (!d || d.code !== 200) return;
+                                const cover = d.cover ? ('/api/douban-image?url=' + encodeURIComponent(d.cover)) : '';
+                                this.infoModalData = Object.assign({}, base, {
+                                    title: d.title || base.title,
+                                    original_title: d.original_title || base.original_title || '',
+                                    overview: d.overview || base.overview || '',
+                                    vote_average: d.vote_average || base.vote_average || 0,
+                                    release_date: d.year || base.release_date || '',
+                                    runtime: d.runtime || 0,
+                                    poster_path: cover || base.poster_path,
+                                    backdrop_path: cover || base.backdrop_path,
+                                    _doubanDetail: true
+                                });
+                            })
+                            .catch(() => { });
+                        return;
+                    }
                     this.infoModalData = item;
                     this.showInfoModal = true;
                 },
@@ -13167,6 +12912,7 @@
                 //   以前取搜索结果里第一个有图的:海贼王 → 《海贼王女》、老师 → 《老练律师》,还标着"剧照"。优先横版剧照,没有就它的海报;
                 //   对不上 → null(卡片只放片名)。图片走现有的 TMDB 图片地址(同源代理 / 官方 CDN)带 crossOrigin 读;读不了就不画图,绝不污染卡片画布
                 async _frameBackdrop(name, hint) {
+                    if (!TMDB_API_KEY) return null;
                     hint = hint || {};
                     const memo = this._frameArtMemo || (this._frameArtMemo = new Map());
                     const mk = name + '|' + (hint.tv ? 't' : 'm') + (hint.year || '');
@@ -13727,10 +13473,8 @@
                 },
                 _trialRunDeferred() {
                     this._trialBoot = null;
-                    if (TMDB_API_KEY) {
-                        try { const p = this.fetchHero(); if (p && p.catch) p.catch(() => { }); } catch (e) { }
-                        try { this.fetchAllLists(); } catch (e) { }
-                    }
+                    try { const p = this.fetchHero(); if (p && p.catch) p.catch(() => { }); } catch (e) { }
+                    try { this.fetchAllLists(); } catch (e) { }
                     this.loadWatchHistory();
                     if (this.watchStatsEnabled) this._shareOpenReport();   // 没登录时它不报;现在有令牌了,记下这次分享带来了登录
                 },
@@ -13975,49 +13719,42 @@
                         return this.fetchRandomMixed(loadMore);
                     }
                     const config = this.rowConfigs[key];
-                    if (!config) return Promise.resolve();
+                    if (!config || !config.source) return Promise.resolve();
 
+                    const limit = 20;
                     if (loadMore) {
-                        // 检查是否已到达 API 返回的总页数
-                        if (config.totalPages && config.page >= config.totalPages) {
-                            console.log(`[${key}] 已加载全部 ${config.totalPages} 页`);
-                            return Promise.resolve();
-                        }
+                        if (config.done) return Promise.resolve();
                         config.page++;
                     }
-
-                    // 构建排序参数
-                    let sortParam = '';
-                    if (config.sortMode && config.path.includes('/discover/')) {
-                        const isMovie = config.path.includes('/movie');
-                        if (config.sortMode === 'newest') {
-                            const dateField = isMovie ? 'primary_release_date.desc' : 'first_air_date.desc';
-                            sortParam = `&sort_by=${dateField}&vote_count.gte=10`;
-                        } else {
-                            sortParam = '&sort_by=popularity.desc';
-                        }
+                    const start = Math.max(0, (config.page - 1) * limit);
+                    let api;
+                    if (config.source === 'douban-tag') {
+                        api = '/api/douban/list?kind=' + encodeURIComponent(config.kind)
+                            + '&tag=' + encodeURIComponent(config.tag)
+                            + '&start=' + start + '&limit=' + limit;
+                    } else {
+                        api = '/api/douban/recent?kind=' + encodeURIComponent(config.kind)
+                            + '&category=' + encodeURIComponent(config.category)
+                            + '&type=' + encodeURIComponent(config.type)
+                            + '&start=' + start + '&limit=' + limit;
                     }
-
-                    const url = `/api/tmdb-proxy?path=${encodeURIComponent(config.path)}&page=${config.page}&${config.params}${sortParam}`;
-                    return tmdbFetch(url)
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.results) {
-                                // 保存总页数信息
-                                if (data.total_pages) {
-                                    config.totalPages = data.total_pages;
-                                }
-                                // 确保响应式更新
-                                if (!this.rowLists[key]) {
-                                    this.rowLists[key] = data.results;
-                                } else if (loadMore) {
-                                    this.rowLists[key].push(...data.results);
-                                } else {
-                                    this.rowLists[key] = data.results;
-                                }
-                            }
+                    return fetchT(api, {}, 15000)
+                        .then(res => {
+                            if (!res.ok) throw new Error('HTTP ' + res.status);
+                            return res.json();
                         })
-                        .catch(err => console.error(`Fetch error for ${key}:`, err));
+                        .then(data => {
+                            const list = data.list || [];
+                            if (!this.rowLists[key] || !loadMore) this.rowLists[key] = [];
+                            if (loadMore) this.rowLists[key].push(...list);
+                            else this.rowLists[key] = list;
+                            config.done = list.length < limit;
+                            if (data.total) config.totalPages = Math.ceil(data.total / limit);
+                        })
+                        .catch(err => {
+                            config.done = true;
+                            console.error(`[Douban Row] ${key}:`, err);
+                        });
                 },
 
                 // 隐秘切换排序模式
@@ -14101,72 +13838,60 @@
                     const config = this.rowConfigs.randomRow;
                     if (!config) return Promise.resolve();
 
-                    // 使用日期 + 小时作为种子，同一小时内的请求会使用相同的参数，可以命中缓存
                     const now = new Date();
-                    const dateSeed = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
-                    const hourSeed = now.getHours();
-
-                    // 简单的伪随机函数（基于种子）
-                    const seededRandom = (seed, index) => {
-                        const x = Math.sin(seed * 9999 + index * 7777) * 10000;
+                    const seedBase = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate() + now.getHours();
+                    const rnd = (i) => {
+                        const x = Math.sin((seedBase + (loadMore ? 37 : 0)) * 9999 + i * 7777) * 10000;
                         return x - Math.floor(x);
                     };
 
-                    // 如果是加载更多，使用不同的种子组
-                    const seedOffset = loadMore ? (config.loadCount || 0) + 1 : 0;
-                    config.loadCount = seedOffset;
-
-                    const randomRequests = [];
-                    const types = ['movie', 'tv'];
-                    // 所有类型（包括恐怖和浪漫），通过分级过滤来排除成人内容
-                    const genres = [28, 35, 10749, 16, 80, 18, 14, 27, 10751, 9648];
-
-                    // 每次抓取生成 4 个不同的随机源（基于种子）
-                    for (let i = 0; i < 4; i++) {
-                        const baseSeed = dateSeed + hourSeed + seedOffset * 100 + i;
-
-                        const type = types[Math.floor(seededRandom(baseSeed, 1) * types.length)];
-                        const page = Math.floor(seededRandom(baseSeed, 2) * 10) + 1;
-                        const genreIndex = Math.floor(seededRandom(baseSeed, 3) * genres.length);
-
-                        // 使用固定的参数组合，确保可缓存
-                        // 添加 include_adult=false 过滤明确的成人内容
-                        // 添加分级过滤：电影 PG-13 以下，电视 TV-14 以下（排除 R 级、NC-17 等情色内容）
-                        let adultParam = '';
-                        if (this.filterNsfw) {
-                            adultParam = '&include_adult=false';
-                            if (type === 'movie') {
-                                // 美国电影分级：G, PG, PG-13, R, NC-17，只显示 PG-13 及以下
-                                adultParam += '&certification_country=US&certification.lte=PG-13';
-                            } else {
-                                // 美国电视分级：TV-Y, TV-Y7, TV-G, TV-PG, TV-14, TV-MA，只显示 TV-14 及以下
-                                adultParam += '&certification_country=US&certification.lte=TV-14';
-                            }
-                        }
-                        const url = `/api/tmdb-proxy?path=${encodeURIComponent('/discover/' + type)}&page=${page}&sort_by=popularity.desc&with_genres=${genres[genreIndex]}${adultParam}`;
-                        randomRequests.push(tmdbFetch(url).then(res => res.json()));
+                    const keys = Object.keys(this.rowConfigs).filter(k => k !== 'randomRow' && this.rowConfigs[k].source);
+                    const chosen = [], used = new Set();
+                    for (let i = 0; i < 4 && chosen.length < 4 && keys.length; i++) {
+                        let idx = Math.floor(rnd(i) * keys.length);
+                        let guard = 0;
+                        while (used.has(idx) && used.size < keys.length && guard++ < keys.length) idx = (idx + 1) % keys.length;
+                        used.add(idx);
+                        chosen.push(keys[idx]);
                     }
 
-                    try {
-                        const results = await Promise.all(randomRequests);
-                        let combined = [];
-                        results.forEach(data => {
-                            if (data.results) combined.push(...data.results);
-                        });
+                    const fetchPool = (key, i) => {
+                        const c = this.rowConfigs[key];
+                        const start = (loadMore ? 20 : 0) + Math.floor(rnd(i + 10) * 2) * 20;
+                        let api;
+                        if (c.source === 'douban-tag') {
+                            api = '/api/douban/list?kind=' + encodeURIComponent(c.kind)
+                                + '&tag=' + encodeURIComponent(c.tag)
+                                + '&start=' + start + '&limit=20';
+                        } else {
+                            api = '/api/douban/recent?kind=' + encodeURIComponent(c.kind)
+                                + '&category=' + encodeURIComponent(c.category)
+                                + '&type=' + encodeURIComponent(c.type)
+                                + '&start=' + start + '&limit=20';
+                        }
+                        return fetchT(api, {}, 15000)
+                            .then(r => r.ok ? r.json() : { list: [] })
+                            .then(d => d.list || [])
+                            .catch(() => []);
+                    };
 
-                        // --- 🔀 洗牌算法 (使用种子的随机洗牌，但结果仍然每次不同) ---
+                    try {
+                        const lists = await Promise.all(chosen.map(fetchPool));
+                        const seen = new Set(loadMore ? (this.rowLists.randomRow || []).map(x => x.id) : []);
+                        const combined = [];
+                        for (const list of lists) {
+                            for (const it of list) {
+                                if (!it || seen.has(it.id)) continue;
+                                seen.add(it.id);
+                                combined.push(it);
+                            }
+                        }
                         for (let i = combined.length - 1; i > 0; i--) {
                             const j = Math.floor(Math.random() * (i + 1));
                             [combined[i], combined[j]] = [combined[j], combined[i]];
                         }
-
-                        if (!this.rowLists.randomRow || !loadMore) {
-                            this.rowLists.randomRow = combined;
-                        } else {
-                            this.rowLists.randomRow.push(...combined);
-                        }
-
-                        // console.log(`[随机盲盒] 成功混搭并洗牌 ${combined.length} 条数据 (种子: ${dateSeed})`);
+                        if (!this.rowLists.randomRow || !loadMore) this.rowLists.randomRow = combined;
+                        else this.rowLists.randomRow.push(...combined);
                     } catch (e) {
                         console.error('[随机盲盒] 混搭失败:', e);
                     }
@@ -14606,6 +14331,7 @@
                 //   全部走 tmdbFetch → /api/tmdb-proxy;结果只在真变了时整个换掉 favAir(一次)
                 async _favSchedRun() {
                     if (this._favSchedBusy) { this._favSchedAgain = true; return; }
+                    if (!TMDB_API_KEY) return;
                     if (!this.favoritesEnabled || this.showDetail || this.searched || !(this.favList || []).length) return;
                     this._favSchedBusy = true;
                     const S = DgFavSched, KEY = 'donggua_fav_tmdb', now = Date.now(), today = this.favToday;
@@ -14727,6 +14453,22 @@
                     } catch (e) { console.warn('[大家都在看] 获取失败:', e); }
                 },
                 async _popularPosters(list) {
+                    if (!TMDB_API_KEY) {
+                        return Promise.all((list || []).map(async x => {
+                            try {
+                                const r = await fetchT('/api/douban/search?q=' + encodeURIComponent(x.title), {}, 8000);
+                                const d = r.ok ? await r.json() : null;
+                                const hit = ((d && d.list) || []).find(y => y.cover) || null;
+                                return Object.assign({}, x, {
+                                    poster_path: hit ? ('/api/douban-image?url=' + encodeURIComponent(hit.cover)) : '',
+                                    name: hit ? hit.title : x.title,
+                                    year: hit ? hit.year : ''
+                                });
+                            } catch (e) {
+                                return Object.assign({}, x, { poster_path: '', name: x.title, year: '' });
+                            }
+                        }));
+                    }
                     const CK = 'donggua_tmdb_title', TTL = 7 * 24 * 3600 * 1000, NEG_TTL = 24 * 3600 * 1000;
                     const cache = Object.create(null);   // 片名当键:无原型,防 __proto__ 之类的片名
                     try { Object.assign(cache, JSON.parse(localStorage.getItem(CK) || '{}') || {}); } catch (e) { }
@@ -15329,20 +15071,23 @@
                 },
 
                 fetchHero() {
-                    return tmdbFetch(`/api/tmdb-proxy?path=${encodeURIComponent('/trending/all/week')}`)
-                        .then(res => res.json())
+                    return fetchT('/api/douban/hero', {}, 15000)
+                        .then(res => {
+                            if (!res.ok) throw new Error('HTTP ' + res.status);
+                            return res.json();
+                        })
                         .then(data => {
-                            if (data.results) {
-                                this.heroList = data.results.filter(i => i.backdrop_path).slice(0, 5).map(item => ({
-                                    title: item.title || item.name,
-                                    originalTitle: item.original_title || item.original_name || '',  // 原始标题（通常是英文）
-                                    overview: item.overview || '精彩内容不容错过',
-                                    backdrop: `${TMDB_BACKDROP_URL}${item.backdrop_path}`,
-                                    rawData: item
-                                }));
-                                this.heroActiveIndex = 0;
-                                this.$nextTick(() => this.setupHeroIndicators());
-                            }
+                            const list = (data && data.list) || [];
+                            if (!list.length) return;
+                            this.heroList = list.slice(0, 5).map(item => ({
+                                title: item.title || '',
+                                originalTitle: item.originalTitle || '',
+                                overview: item.overview || '精彩内容不容错过',
+                                backdrop: item.backdrop || item.poster || '',
+                                rawData: item.rawData || item
+                            }));
+                            this.heroActiveIndex = 0;
+                            this.$nextTick(() => this.setupHeroIndicators());
                         })
                         .catch(e => {
                             console.error('[Hero] 加载失败:', e);
@@ -15385,6 +15130,18 @@
                     if (this.imageMap[key] || this.fallbackMap[key]) return;
                     this.fallbackMap[key] = true;
                     let cleanName = name.replace(/第[0-9一二三四五六七八九十]+[季部]/g, '').replace(/Season\s*\d+/ig, '').replace(/S\d{1,2}/ig, '').replace(/(HD|BD|1080P|720P|4K|202\d|TC|TS).*/i, '').trim();
+                    if (!TMDB_API_KEY) {
+                        fetchT('/api/douban/search?q=' + encodeURIComponent(cleanName), {}, 10000)
+                            .then(r => r.ok ? r.json() : null)
+                            .then(d => {
+                                const hit = ((d && d.list) || []).find(x => x.cover);
+                                if (hit) {
+                                    this.imageMap[key] = '/api/douban-image?url=' + encodeURIComponent(hit.cover);
+                                    this.fallbackMap[key] = false;
+                                }
+                            }).catch(() => { });
+                        return;
+                    }
                     tmdbFetch(`/api/tmdb-proxy?path=${encodeURIComponent('/search/multi')}&query=${encodeURIComponent(cleanName)}`)
                         .then(res => res.json()).then(data => {
                             if (data.results && data.results.length > 0) {
@@ -20996,6 +20753,7 @@
                 //    搜最近6条历史拿每部 genre_ids+original_language → 【按语言分组】(覆盖多口味:国产剧+美国电影各自一组)
                 //    → 每组取最常见2类型、/discover 同语言同类型按热度 → 按各组观看部数【加权配额】混合。全程走 tmdb-proxy(免费)。
                 async fetchRecommendations() {
+                    if (!TMDB_API_KEY) { this.recommendList = []; this._recLoaded = true; return; }
                     try {
                         if (this._recLoaded) return;
                         const names = (this.watchHistory || []).slice(0, 6).map(h => h && h.name).filter(Boolean);
