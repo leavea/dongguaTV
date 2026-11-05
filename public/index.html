@@ -87,11 +87,9 @@
     <script data-cfasync="false" src="libs/js/vue.global.prod.min.js"></script>
 
     <!-- 非关键脚本 (延迟加载) -->
-    <script data-cfasync="false" src="libs/js/hls.min.js?v=1.1.5-lc1" defer></script>   <!-- ?v= 必带:/libs 有 30 天 HTTP 缓存,补丁版(AAC-LC 信令,见 _dgHlsCustomType 注释)靠换 URL 才能到达老用户浏览器 -->
     <script data-cfasync="false" src="libs/js/kz-titlematch.js?v=1" defer></script>   <!-- 🎌 Kazumi 源片名归一化/并组(服务端 lib/kazumi 共用同一文件) -->
     <script data-cfasync="false" src="libs/js/ad-clip-core.js?v=6" defer></script>   <!-- 🛡️ 插播广告"分辨率突变/时间戳重启"判定 + 原生 HLS 分片头解析(window.adClipSkip 用;改了要升 ?v= 和 sw.js 版本) -->
     <script data-cfasync="false" src="libs/js/ad-filter.js?v=4.0" defer></script>
-    <script data-cfasync="false" src="libs/js/DPlayer.min.js" defer></script>
     <script data-cfasync="false" src="libs/js/bootstrap.bundle.min.js" defer></script>
 
     <style>
@@ -4768,6 +4766,17 @@
                 font-size: 12px;
             }
         }
+
+        /* 📱 手机首页：减少间距/大图与动画开销 */
+        @media (max-width: 768px) {
+            .home-flow > .home-sec { margin-top: 30px; margin-bottom: 28px; }
+            .section-header { margin-bottom: 14px; padding: 0 4px; }
+            .hero-desc { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .animate__animated { animation: none !important; }
+            .hot-card, .scroll-btn, .expand-toggle { transition: none !important; }
+        }
     </style>
 </head>
 
@@ -4871,7 +4880,7 @@
             <div class="carousel-inner" v-if="heroList.length > 0">
                 <div class="carousel-item" v-for="(item, index) in heroList" :key="index"
                     :class="{ active: index === 0 }">
-                    <div class="hero-bg" :style="{ backgroundImage: 'url(' + item.backdrop + ')' }"></div>
+                    <div class="hero-bg" :style="{ backgroundImage: heroBackdrop(item, index) }"></div>
                     <div class="hero-overlay">
                         <div class="hero-content">
                             <div class="hero-tag">本周 TOP {{ index + 1 }}</div>
@@ -4902,7 +4911,7 @@
             <div class="search-box-wrapper" :class="{ 'compact': !offHome && pastCompactThreshold }">
                 <i class="fas fa-search search-icon" @click="submitSearch(true)"></i>
                 <input type="text" v-model="keyword" @keyup.enter="submitSearch(true)" @input="debouncedSearch"
-                    class="search-input" placeholder="输入片名或分类（如 电影、美剧、动漫）">
+                    class="search-input" placeholder="输入片名或分类（如 电影、电视剧、综艺）">
             </div>
         </div>
 
@@ -4912,302 +4921,8 @@
                  第一个块上边距大一些(home-first);板块里的 ref 在 v-for 里是数组,取用处都要先取 [0] -->
             <template v-for="({ id, k, key, config }, bi) in homeBlocks" :key="id">
             <!-- 🕐 观看历史 -->
-            <div v-if="k === 'history'" class="section-container home-sec animate__animated animate__fadeInUp"
-                :class="{ 'home-first': bi === 0 }">
-                <div class="section-header" style="display: flex; align-items: center;">
-                    <div class="section-line" style="background: linear-gradient(135deg, #667eea, #764ba2);"></div>
-                    <div class="section-title"><i class="fas fa-history"></i> 继续观看</div>
-                    <!-- 同步状态图标 (双击退出登录) -->
-                    <span v-if="syncEnabled" style="margin-left: 8px; font-size: 12px; opacity: 0.6; cursor: pointer;"
-                        :title="syncStatus === 'syncing' ? '正在同步...' : syncStatus === 'success' ? '已同步' : syncStatus === 'error' ? '同步失败' : '云同步已启用 (双击退出)'"
-                        @dblclick="confirmLogout">
-                        <i v-if="syncStatus === 'syncing'" class="fas fa-sync-alt fa-spin" style="color: #60a5fa;"></i>
-                        <i v-else-if="syncStatus === 'success'" class="fas fa-cloud-upload-alt"
-                            style="color: #46d369;"></i>
-                        <i v-else-if="syncStatus === 'error'" class="fas fa-exclamation-triangle"
-                            style="color: #ef4444;"></i>
-                        <i v-else class="fas fa-cloud" style="color: #888;"></i>
-                    </span>
-                    <span class="expand-toggle" @click="clearWatchHistory"
-                        style="margin-left: auto; color: #888; font-size: 12px;">
-                        <i class="fas fa-trash-alt"></i> 清除全部
-                    </span>
-                </div>
-
-                <!-- 横向滚动 -->
-                <div class="scroll-container">
-                    <button class="scroll-btn left" v-show="historyCanScrollLeft" @click="scrollHistoryRow(-1)"
-                        aria-label="向左滚动观看历史"><i class="fas fa-chevron-left" aria-hidden="true"></i></button>
-                    <div class="hot-row" ref="watchHistoryRow" @scroll="onHistoryScroll">
-                        <div class="history-card" v-for="(item, index) in watchHistory" :key="item.name + index">
-                            <!-- 删除按钮 (放在 card 外层避免随缩放移动) -->
-                            <div class="history-delete-btn" @click.stop="removeFromHistory(index)">
-                                <i class="fas fa-times"></i>
-                            </div>
-                            <div class="poster-wrap" @click="playFromHistory(item)">
-                                <img :src="item.poster" :alt="item.name" decoding="async"
-                                    @load="$event.target.classList.add('loaded'); $event.target.parentElement && $event.target.parentElement.classList.add('img-loaded')"
-                                    @error="$event.target.src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27150%27 height=%27225%27%3E%3Crect fill=%27%23333%27 width=%27150%27 height=%27225%27/%3E%3C/svg%3E'; $event.target.classList.add('loaded'); $event.target.parentElement && $event.target.parentElement.classList.add('img-loaded')"
-                                    loading="lazy">
-                                <!-- 进度条 -->
-                                <div
-                                    style="position: absolute; bottom: 0; left: 0; right: 0; height: 4px; background: rgba(0,0,0,0.5);">
-                                    <div
-                                        :style="{ width: item.progress + '%', height: '100%', background: 'linear-gradient(90deg, #e50914, #ff4757)' }">
-                                    </div>
-                                </div>
-                                <!-- 集数标签 -->
-                                <div v-if="item.episode"
-                                    style="position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.8); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 4px;">
-                                    {{ item.episode }}
-                                </div>
-                                <!-- 播放图标 -->
-                                <div class="play-icon-overlay">
-                                    <i class="fas fa-play"></i>
-                                </div>
-                            </div>
-                            <div class="movie-name" @click="playFromHistory(item)">{{ item.name }}</div>
-                            <div class="movie-date" style="font-size: 11px;">{{ formatWatchTime(item.watchedAt) }}</div>
-                        </div>
-                    </div>
-                    <button class="scroll-btn right" v-show="historyCanScrollRight" @click="scrollHistoryRow(1)"
-                        aria-label="向右滚动观看历史"><i class="fas fa-chevron-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-
-            <!-- ⭐ 我的收藏(追剧 + 更新提醒):服务器没开收藏(无 sqlite / Vercel)或一部都没收藏时整段隐藏 -->
-            <div v-else-if="k === 'fav'" class="section-container home-sec animate__animated animate__fadeInUp"
-                :class="{ 'home-first': bi === 0 }">
-                <div class="section-header" style="display: flex; align-items: center;">
-                    <div class="section-line" style="background: linear-gradient(135deg, #ff4b6e, #e50914);"></div>
-                    <div class="section-title"><i class="fas fa-heart"></i> 我的收藏</div>
-                    <span v-if="favUpdateCount > 0" style="margin-left: 12px; color: #ff6b6b; font-size: 12px;">{{ favUpdateCount }} 部有更新</span>
-                    <span style="margin-left: auto; color: #777; font-size: 12px;">{{ favList.length }} / {{ favLimit }}</span>
-                </div>
-                <!-- 📅 本周更新:今天起 7 天,每天列出预计更新的收藏(TMDB 下一集日期 / 服务器推出的更新规律);一部都没有时整条隐藏。
-                     固定一行高、横向滑动:内容变了不挤动下面的收藏行 -->
-                <div class="fav-week" v-if="favSched.week" aria-label="本周更新">
-                    <span class="fav-week-title"><i class="fas fa-calendar-week" aria-hidden="true"></i> 本周更新</span>
-                    <div class="fav-week-day" v-for="d in favSched.week" :key="d.date" :class="{ today: d.today, empty: !d.items.length }" :title="d.md">
-                        <span class="fav-week-lbl">{{ d.label }}</span>
-                        <button type="button" class="fav-week-show" v-for="e in d.items" :key="d.date + '|' + e.id" @click="openFavorite(e.item)">{{ e.name }}</button>
-                    </div>
-                </div>
-                <div class="scroll-container">
-                    <button class="scroll-btn left" v-show="favCanScrollLeft" @click="scrollRowBy('favRow', -1)"
-                        aria-label="向左滚动收藏"><i class="fas fa-chevron-left" aria-hidden="true"></i></button>
-                    <div class="hot-row" ref="favRow" @scroll="onFavPopRowScroll('favRow', 'fav')">
-                        <div class="history-card" v-for="item in favSorted" :key="'fav-' + item.fav_id">
-                            <div class="history-delete-btn" title="取消收藏" @click.stop="removeFavorite(item)">
-                                <i class="fas fa-times"></i>
-                            </div>
-                            <div class="poster-wrap" @click="openFavorite(item)">
-                                <img :src="(item.data && item.data.poster) || getPosterUrl('')" :alt="item.data && item.data.name" decoding="async" loading="lazy"
-                                    referrerpolicy="no-referrer"
-                                    @load="$event.target.classList.add('loaded'); $event.target.parentElement && $event.target.parentElement.classList.add('img-loaded')"
-                                    @error="$event.target.src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27150%27 height=%27225%27%3E%3Crect fill=%27%23333%27 width=%27150%27 height=%27225%27/%3E%3C/svg%3E'; $event.target.classList.add('loaded'); $event.target.parentElement && $event.target.parentElement.classList.add('img-loaded')">
-                                <div v-if="favHasUpdate(item)" class="fav-upd-badge">{{ favBadgeText(item) }}</div>
-                                <div class="play-icon-overlay">
-                                    <i class="fas fa-play"></i>
-                                </div>
-                            </div>
-                            <div class="movie-name" @click="openFavorite(item)">{{ item.data && item.data.name }}</div>
-                            <div class="movie-date" style="font-size: 11px;">{{ favSubText(item) }}</div>
-                            <!-- 📅 下一集:有一张卡有这一行时每张卡都占一行高(空着也占),卡片高度一致 -->
-                            <div v-if="favSched.any" class="fav-sched" @click="openFavorite(item)">{{ favSched.line[item.fav_id] || '' }}</div>
-                        </div>
-                    </div>
-                    <button class="scroll-btn right" v-show="favCanScrollRight" @click="scrollRowBy('favRow', 1)"
-                        aria-label="向右滚动收藏"><i class="fas fa-chevron-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-
-            <!-- ✨ 为你推荐：基于观看历史的 TMDB 推荐(无历史/无结果时整段隐藏) -->
-            <div v-else-if="k === 'recommend'" class="section-container home-sec animate__animated animate__fadeInUp"
-                :class="{ 'home-first': bi === 0 }" ref="recommendSection">
-                <div class="section-header" style="display: flex; align-items: center;">
-                    <div class="section-line" style="background: linear-gradient(135deg, #f5af19, #f12711);"></div>
-                    <div class="section-title"><i class="fas fa-magic"></i> 为你推荐</div>
-                    <span style="margin-left: 12px; color: #777; font-size: 12px;">根据你的观看记录</span>
-                    <span class="expand-toggle" :class="{ expanded: recommendExpanded }"
-                        @click="recommendExpanded = !recommendExpanded" style="margin-left: auto;">
-                        {{ recommendExpanded ? '收起' : '展开' }}
-                        <i class="fas fa-chevron-down"></i>
-                    </span>
-                </div>
-                <!-- 收起：横向滚动 + 左右翻页箭头 -->
-                <div class="scroll-container" v-show="!recommendExpanded">
-                    <button class="scroll-btn left" v-show="recommendCanScrollLeft" @click="scrollRecommendRow(-1)"
-                        aria-label="向左滚动推荐"><i class="fas fa-chevron-left" aria-hidden="true"></i></button>
-                    <div class="hot-row" ref="recommendRow" @scroll="onRecommendScroll">
-                        <div class="hot-card" v-for="item in recommendList"
-                            :key="'rec-' + (item.media_type || '') + '-' + item.id"
-                            @click="autoSearch(item.title || item.name, item.original_title || item.original_name)">
-                            <div class="poster-wrap">
-                                <img :src="getPosterUrl(item.poster_path)" loading="lazy" decoding="async"
-                                    @load="$event.target.classList.add('loaded'); $event.target.parentElement.classList.add('img-loaded')">
-                                <div class="rating-badge"><i class="fas fa-star text-warning"></i> {{
-                                    item.vote_average ? item.vote_average.toFixed(1) : 'N/A' }}</div>
-                            </div>
-                            <div class="movie-name">{{ item.title || item.name }}</div>
-                            <div class="movie-date">{{ (item.release_date || item.first_air_date || '').split('-')[0]
-                                }}</div>
-                        </div>
-                    </div>
-                    <button class="scroll-btn right" v-show="recommendCanScrollRight" @click="scrollRecommendRow(1)"
-                        aria-label="向右滚动推荐"><i class="fas fa-chevron-right" aria-hidden="true"></i></button>
-                </div>
-                <!-- 展开：网格(全部一次看) -->
-                <div v-show="recommendExpanded">
-                    <div class="grid-expanded">
-                        <div class="hot-card" v-for="item in recPaged()"
-                            :key="'recg-' + (item.media_type || '') + '-' + item.id"
-                            @click="autoSearch(item.title || item.name, item.original_title || item.original_name)">
-                            <div class="poster-wrap">
-                                <img :src="getPosterUrl(item.poster_path)" loading="lazy" decoding="async"
-                                    @load="$event.target.classList.add('loaded'); $event.target.parentElement.classList.add('img-loaded')">
-                                <div class="rating-badge"><i class="fas fa-star text-warning"></i> {{
-                                    item.vote_average ? item.vote_average.toFixed(1) : 'N/A' }}</div>
-                            </div>
-                            <div class="movie-name">{{ item.title || item.name }}</div>
-                            <div class="movie-date">{{ (item.release_date || item.first_air_date || '').split('-')[0] }}</div>
-                        </div>
-                    </div>
-                    <!-- 展开后分页：候选多于一页时显示上一页/下一页 -->
-                    <div class="rec-pager" v-if="recTotalPages() > 1">
-                        <button class="rec-pager-btn" :disabled="recommendPage <= 1" @click="recPagePrev"
-                            aria-label="上一页"><i class="fas fa-chevron-left"></i></button>
-                        <span class="rec-pager-info">{{ recommendPage }} / {{ recTotalPages() }}</span>
-                        <button class="rec-pager-btn" :disabled="recommendPage >= recTotalPages()" @click="recPageNext"
-                            aria-label="下一页"><i class="fas fa-chevron-right"></i></button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 👥 大家都在看：站内实测观看统计(除自己外至少 2 人各看过 2 分钟才上榜,只给片名;自己历史记录里有的不显示);不足 4 部整段隐藏 -->
-            <div v-else-if="k === 'popular'" class="section-container home-sec animate__animated animate__fadeInUp"
-                :class="{ 'home-first': bi === 0 }">
-                <div class="section-header" style="display: flex; align-items: center;">
-                    <div class="section-line" style="background: linear-gradient(135deg, #00c6ff, #0072ff);"></div>
-                    <div class="section-title"><i class="fas fa-users"></i> 大家都在看</div>
-                    <span style="margin-left: 12px; color: #777; font-size: 12px;">本站用户最近 7 天常看</span>
-                </div>
-                <div class="scroll-container">
-                    <button class="scroll-btn left" v-show="popularCanScrollLeft" @click="scrollRowBy('popularRow', -1)"
-                        aria-label="向左滚动大家都在看"><i class="fas fa-chevron-left" aria-hidden="true"></i></button>
-                    <div class="hot-row" ref="popularRow" @scroll="onFavPopRowScroll('popularRow', 'popular')">
-                        <div class="hot-card" v-for="item in popularShown" :key="'pop-' + item.title"
-                            @click="autoSearch(item.name)">
-                            <div class="poster-wrap">
-                                <img :src="getPosterUrl(item.poster_path)" loading="lazy" decoding="async"
-                                    @load="$event.target.classList.add('loaded'); $event.target.parentElement.classList.add('img-loaded')">
-                            </div>
-                            <div class="movie-name">{{ item.name }}</div>
-                            <div class="movie-date">{{ item.year || '' }}</div>
-                        </div>
-                    </div>
-                    <button class="scroll-btn right" v-show="popularCanScrollRight" @click="scrollRowBy('popularRow', 1)"
-                        aria-label="向右滚动大家都在看"><i class="fas fa-chevron-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-
-            <!-- 📺 直播频道：主页一行(干净，无副标题/筛选；分类+全部频道在播放页 grid)。关闭/无数据时隐藏 -->
-            <div v-else-if="k === 'live'" class="section-container home-sec animate__animated animate__fadeInUp"
-                :class="{ 'home-first': bi === 0 }">
-                <div class="section-header" style="display: flex; align-items: center;">
-                    <div class="section-line" style="background: linear-gradient(135deg, #e50914, #ff6a00);"></div>
-                    <div class="section-title"><i class="fas fa-tower-broadcast"></i> 直播频道</div>
-                </div>
-                <div class="live-cctv-hint">
-                    <i class="fas fa-circle-info"></i>
-                    海外网络下 <b>CCTV-1/2/3/5/5+/6/7/8</b> 等台无法播放，是 <b>地区与版权限制</b>(运营商组播源仅限国内特定运营商宽带 IP，连国内代理也未必能通)，非本站问题。<b>CGTN、CCTV-4/9/13/15/16、各卫视、国际频道</b>可正常观看(灰色=实测放不了)。
-                </div>
-                <!-- 最近观看频道(有才显示) -->
-                <template v-if="liveRecentChannels.length">
-                    <div class="live-sub-label"><i class="fas fa-clock"></i> 最近观看
-                        <span class="live-recent-clear" @click="clearLiveRecent">清空</span>
-                    </div>
-                    <div class="hot-row live-row" style="margin-bottom: 8px;">
-                        <div class="live-card" v-for="ch in liveRecentChannels" :key="'lr-' + ch.id"
-                            @click="openLiveChannel(ch)">
-                            <button class="live-recent-del" @click.stop="removeLiveRecent(ch.id)"
-                                aria-label="删除最近观看" title="删除"><i class="fas fa-times"></i></button>
-                            <div class="live-logo">
-                                <i class="fas fa-tv live-logo-fallback"></i>
-                                <img v-if="ch.logo" :src="ch.logo" loading="lazy" decoding="async"
-                                    @error="$event.target.style.display = 'none'">
-                            </div>
-                            <div class="live-name">{{ ch.name }}</div>
-                        </div>
-                    </div>
-                    <div class="live-sub-label"><i class="fas fa-list"></i> 常用频道</div>
-                </template>
-                <!-- 频道行(横向滚动；按可达性排序，点开后在播放页看全部+分类) -->
-                <div class="scroll-container">
-                    <button class="scroll-btn left" v-show="liveCanScrollLeft" @click="scrollLiveRow(-1)"
-                        aria-label="向左滚动频道"><i class="fas fa-chevron-left" aria-hidden="true"></i></button>
-                    <div class="hot-row live-row" ref="liveRow" @scroll="onLiveScroll">
-                        <div class="live-card" v-for="ch in liveHomeChannels" :key="'lc-' + ch.id"
-                            :class="{ 'live-dead': ch.ok === false }" @click="openLiveChannel(ch)">
-                            <div class="live-logo">
-                                <i class="fas fa-tv live-logo-fallback"></i>
-                                <img v-if="ch.logo" :src="ch.logo" loading="lazy" decoding="async"
-                                    @error="$event.target.style.display = 'none'">
-                            </div>
-                            <div class="live-name">{{ ch.name }}</div>
-                        </div>
-                    </div>
-                    <button class="scroll-btn right" v-show="liveCanScrollRight" @click="scrollLiveRow(1)"
-                        aria-label="向右滚动频道"><i class="fas fa-chevron-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-
-            <!-- 🗂️ 分类栏:上面一行切大类(只换下面的标签)+ 随机盲盒 / 猜你想看两个快捷入口;下面是选中大类的地区、题材,点了进分类浏览页 -->
-            <section v-else-if="k === 'catnav'" class="catnav animate__animated animate__fadeInUp" :class="{ 'home-first': bi === 0 }" aria-label="分类">
-                <div class="catnav-head">
-                    <div class="cat-tabs" role="group" aria-label="大类">
-                        <!-- 「全部分类」进分类大全(所有大类的地区 / 题材 / 语言 / 年份一页看全);手机上只留图标 -->
-                        <button type="button" class="cat-tab cat-tab-all" @click="openCatDir()" aria-label="全部分类" title="全部分类">
-                            <i class="fas fa-table-cells-large" aria-hidden="true"></i><span class="cat-tab-all-l">全部分类</span></button>
-                        <button v-for="t in catTypes" :key="t.k" type="button" class="cat-tab"
-                            :class="{ active: catNavType === t.k }" :aria-pressed="catNavType === t.k ? 'true' : 'false'"
-                            @click="catNavSelect(t.k)"><i :class="['fas', t.icon]" aria-hidden="true"></i>{{ t.l }}</button>
-                    </div>
-                    <div class="catnav-quick">
-                        <button v-if="!hideRandomRow" type="button" class="catnav-q is-random" @click="catNavJump('random')">
-                            <i class="fas fa-dice" aria-hidden="true"></i>随机盲盒</button>
-                        <button v-if="recommendList.length > 0 && homeOn.recommend" type="button" class="catnav-q is-rec" @click="catNavJump('recommend')">
-                            <i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i>猜你想看</button>
-                    </div>
-                </div>
-                <div class="catnav-body" role="group" :aria-label="catNavLabel">
-                    <div class="catnav-row" v-for="row in catNavRows" :key="catNavType + '-' + row.l">
-                        <span class="catnav-label">{{ row.l }}</span>
-                        <div class="catnav-chips">
-                            <button v-for="it in row.items" :key="it.l" type="button" class="cat-chip"
-                                @click="openBrowse({ type: catNavType, sel: it.sel })">{{ it.l }}</button>
-                        </div>
-                    </div>
-                    <div class="catnav-foot">
-                        <button type="button" class="catnav-all" @click="openBrowse({ type: catNavType, sel: {} })">
-                            全部{{ catNavLabel }}<span class="catnav-all-sub">按年份、评分筛选</span><i class="fas fa-arrow-right" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </div>
-            </section>
-            <!-- 🗂️ 分类分组头：收起时只保留这一行，不渲染/请求该组榜单 -->
-            <div v-else-if="k === 'group'" class="section-container home-sec home-group" :class="{ 'home-first': bi === 0, open: homeGroupOpen[key] }">
-                <div class="section-header home-group-head">
-                    <div class="section-line"></div>
-                    <div class="section-title"><i :class="['fas', config.icon]"></i> {{ config.l }}</div>
-                    <button type="button" class="expand-toggle row-all" @click="openBrowse({ type: key, sel: {} })">全部{{ config.l }} <i class="fas fa-chevron-right"></i></button>
-                    <button type="button" class="expand-toggle home-group-toggle" :class="{ expanded: homeGroupOpen[key] }" @click="toggleHomeGroup(key)" :aria-expanded="homeGroupOpen[key]">
-                        {{ homeGroupOpen[key] ? '收起' : '展开' }} <i class="fas fa-chevron-down"></i>
-                    </button>
-                </div>
-            </div>
             <!-- 动态生成的榜单 Rows(随机盲盒在设置里排的位置,其余分类榜单排在最后) -->
-            <div v-else class="section-container animate__animated animate__fadeInUp" :class="{ 'home-first': bi === 0 }"
+            <div v-if="k === 'row'" class="section-container animate__animated animate__fadeInUp" :class="{ 'home-first': bi === 0 }"
                 :ref="key + '-section'" :data-row-key="key">
                 <!-- 标题区（始终显示，用于懒加载触发） -->
                 <div class="section-header" style="display: flex; align-items: center;">
@@ -6782,6 +6497,33 @@
             const t = setTimeout(() => ctl.abort(), timeoutMs || 8000);
             return fetch(url, { ...(options || {}), signal: ctl.signal }).finally(() => clearTimeout(t));
         }
+
+        // 🎬 播放器库按需加载：首页不下载 hls.js / DPlayer，第一次播放时才拉取。
+        const _playerScripts = new Map();
+        function loadPlayerScript(src) {
+            if (_playerScripts.has(src)) return _playerScripts.get(src);
+            const p = new Promise((resolve, reject) => {
+                const el = document.createElement('script');
+                el.src = src;
+                el.async = true;
+                el.onload = () => resolve();
+                el.onerror = () => { _playerScripts.delete(src); reject(new Error('加载失败: ' + src)); };
+                document.head.appendChild(el);
+            });
+            _playerScripts.set(src, p);
+            return p;
+        }
+        let _playerLibsPromise = null;
+        function ensurePlayerLibs() {
+            if (window.DPlayer && window.Hls) return Promise.resolve();
+            if (_playerLibsPromise) return _playerLibsPromise;
+            _playerLibsPromise = Promise.all([
+                window.Hls ? Promise.resolve() : loadPlayerScript('libs/js/hls.min.js?v=1.1.5-lc1'),
+                window.DPlayer ? Promise.resolve() : loadPlayerScript('libs/js/DPlayer.min.js'),
+            ]).catch(e => { _playerLibsPromise = null; throw e; });
+            return _playerLibsPromise;
+        }
+        window.ensurePlayerLibs = ensurePlayerLibs;
 
         // ========== 📸 截一帧分享(分享当前画面)的纯函数核心 ==========
         //   scripts/frame-share-test.mjs 按 <dg-frame-share-core> 这对标记把整段抽出来在 node 里跑 —— 段内只用参数,不碰页面里的其它变量/DOM。
@@ -9153,23 +8895,21 @@
         //   · 成人过滤只排除 softcore / erotic movie / pink film / hentai / sexploitation 这几个关键词:adult animation、pornography、
         //     ecchi、erotic 也打在《辛普森一家》《出租车司机》《无职转生》这些正经作品上
         // <dg-catalog-core>
-        // 豆瓣分类目录（简化版）：保留原 DgCatalog 的公共方法，数据源改为豆瓣标签。
+        // 豆瓣分类目录：只保留电影 / 电视剧 / 综艺三个大类；每个大类的小类标签（热门/最新/地区/类型）全部保留。
         //   scripts/catalog-test.mjs 按这对标记把整段抽出来在 node 里跑，段内只用参数，不碰页面变量/DOM/网络。
         const DgCatalog = (() => {
             const NSFW_TITLE = /玉蒲团|蜜桃成熟|色欲|淫|情色|艳情|春宫|三级片|性爱|乱伦|走肾|裸体|恋欲|小姨子|嫂子的|继母的|姐姐的朋友|妈妈的朋友|朋友的(妈妈|母亲|姐姐|妹妹|妻子|老婆)|(年轻|漂亮|性感)的(妈妈|母亲|妻子|嫂子|阿姨|姐姐|妹妹)|拷问部/;
             const MOVIE_TAGS = ['热门', '最新', '豆瓣高分', '冷门佳片', '华语', '欧美', '韩国', '日本'];
             const TV_TAGS = ['最近热门', '国产', '欧美', '日本', '韩国', '纪录片'];
-            const ANIME_TAGS = ['最近热门', '日本', '国产', '欧美'];
             const VARIETY_TAGS = ['最近热门', '国内', '国外'];
             const mk = (k, l, icon, media, tags) => ({
                 k, l, icon, media, tags,
-                groups: [{ k: 'tag', l: '标签', opts: tags.map(x => ({ k: x, l: x })) }],
-                nav: [{ l: '标签', g: 'tag' }],
+                groups: [{ k: 'tag', l: '分类', opts: tags.map(x => ({ k: x, l: x })) }],
+                nav: [{ l: '分类', g: 'tag' }],
             });
             const TYPES = [
                 mk('movie', '电影', 'fa-film', 'movie', MOVIE_TAGS),
-                mk('tv', '剧集', 'fa-tv', 'tv', TV_TAGS),
-                mk('anime', '动漫', 'fa-dragon', 'tv', ANIME_TAGS),
+                mk('tv', '电视剧', 'fa-tv', 'tv', TV_TAGS),
                 mk('variety', '综艺', 'fa-microphone-alt', 'tv', VARIETY_TAGS),
             ];
             const typeOf = (k) => TYPES.find(t => t.k === k) || null;
@@ -9178,32 +8918,28 @@
                 const tag = String((sel && sel.tag) || '');
                 return { tag: T.tags.includes(tag) ? tag : '' };
             }
-            // 豆瓣 query：电影走 j/search_subjects 的 tag；剧集/动漫/综艺走 recent_hot 的 category/type
-            function queryFor(tk, tag) {
-                const T = typeOf(tk) || TYPES[0];
+            function queryFor(T, tag) {
                 if (T.k === 'movie') return { mode: 'tag', kind: 'movie', tag: tag || '热门' };
                 if (T.k === 'tv') {
                     const map = {
-                        '最近热门': ['最近热门', '全部'],
+                        '最近热门': ['最近热门', 'tv'],
                         '国产': ['热门', 'tv_domestic'],
                         '欧美': ['热门', 'tv_american'],
                         '日本': ['热门', 'tv_japanese'],
                         '韩国': ['热门', 'tv_korean'],
                         '纪录片': ['热门', 'tv_documentary'],
                     };
-                    const v = map[tag] || ['最近热门', '全部'];
+                    const v = map[tag] || ['最近热门', 'tv'];
                     return { mode: 'recent', kind: 'tv', category: v[0], type: v[1] };
                 }
-                if (T.k === 'anime') {
-                    return { mode: 'recent', kind: 'tv', category: '最近热门', type: 'tv_animation' };
-                }
-                return { mode: 'recent', kind: 'tv', category: '热门', type: '综艺' };
+                // 豆瓣 recent_hot 的 type=全部/综艺 会落到默认综艺列表；国内/国外分别用 show_domestic/show_foreign
+                return { mode: 'recent', kind: 'tv', category: tag === '最近热门' ? '最近热门' : '热门', type: tag === '国外' ? 'show_foreign' : 'show_domestic' };
             }
             function buildQuery(tk, sel, page) {
                 const T = typeOf(tk) || TYPES[0];
                 const s = normSel(T.k, sel);
                 const p = Math.max(1, Math.min(50, parseInt(page, 10) || 1));
-                return Object.assign({}, queryFor(T.k, s.tag), { page: p, start: (p - 1) * 20, limit: 20 });
+                return Object.assign({}, queryFor(T, s.tag), { page: p, start: (p - 1) * 20, limit: 20 });
             }
             function visible(it, nsfw) {
                 if (!it || !it.poster_path) return false;
@@ -9216,12 +8952,12 @@
                 const T = typeOf(tk);
                 if (!T) return [];
                 const s = normSel(tk, sel);
-                return [{ k: 'tag', l: '标签', opts: [{ k: '', l: '全部' }].concat(T.tags.map(x => ({ k: x, l: x, active: s.tag === x }))) }];
+                return [{ k: 'tag', l: '分类', opts: [{ k: '', l: '全部' }].concat(T.tags.map(x => ({ k: x, l: x }))) }];
             }
             function navRows(tk) {
                 const T = typeOf(tk);
                 if (!T) return [];
-                return [{ l: '标签', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }];
+                return [{ l: '分类', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }];
             }
             function title(tk, sel) {
                 const T = typeOf(tk);
@@ -9234,46 +8970,40 @@
             const HOT = [
                 ['热门电影', 'movie', { tag: '热门' }, 'fa-film', '#b31217', '#5c0a0f'],
                 ['豆瓣高分', 'movie', { tag: '豆瓣高分' }, 'fa-star', '#1d6fa5', '#163a6b'],
-                ['最近热门剧集', 'tv', { tag: '最近热门' }, 'fa-tv', '#2b5cff', '#1e3a8a'],
                 ['国产剧', 'tv', { tag: '国产' }, 'fa-dragon', '#e52d27', '#9b1b30'],
                 ['美剧', 'tv', { tag: '欧美' }, 'fa-flag-usa', '#2b5cff', '#1e3a8a'],
                 ['韩剧', 'tv', { tag: '韩国' }, 'fa-heart', '#d6457a', '#7b2ff7'],
                 ['日剧', 'tv', { tag: '日本' }, 'fa-mask', '#8e54e9', '#4776e6'],
-                ['动漫', 'anime', { tag: '最近热门' }, 'fa-ghost', '#ee5a9e', '#9b2fae'],
-                ['综艺', 'variety', { tag: '最近热门' }, 'fa-microphone-alt', '#f0592a', '#a3301b'],
                 ['纪录片', 'tv', { tag: '纪录片' }, 'fa-video', '#178a6b', '#0f4c45'],
+                ['热门综艺', 'variety', { tag: '最近热门' }, 'fa-microphone-alt', '#f0592a', '#a3301b'],
             ];
             function directory() {
                 return {
                     hot: HOT.map(([l, type, sel, icon, c1, c2]) => ({ l, type, sel, icon, bg: 'linear-gradient(135deg, ' + c1 + ', ' + c2 + ')' })),
                     types: TYPES.map(T => ({
                         k: T.k, l: T.l, icon: T.icon,
-                        rows: [{ l: '标签', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }],
+                        rows: [{ l: '分类', items: T.tags.map(x => ({ l: x, sel: { tag: x } })) }],
                     })),
                 };
             }
             const ALIAS = {
-                '电影': ['movie', {}], '电视剧': ['tv', {}], '剧集': ['tv', {}], '连续剧': ['tv', {}],
-                '国产剧': ['tv', { tag: '国产' }], '国剧': ['tv', { tag: '国产' }],
-                '美剧': ['tv', { tag: '欧美' }], '韩剧': ['tv', { tag: '韩国' }], '日剧': ['tv', { tag: '日本' }],
-                '纪录片': ['tv', { tag: '纪录片' }], '动漫': ['anime', {}], '动画': ['anime', {}], '番剧': ['anime', {}],
-                '综艺': ['variety', {}], '华语电影': ['movie', { tag: '华语' }], '欧美电影': ['movie', { tag: '欧美' }],
+                '电影': ['movie', {}], '华语电影': ['movie', { tag: '华语' }], '欧美电影': ['movie', { tag: '欧美' }],
                 '韩国电影': ['movie', { tag: '韩国' }], '日本电影': ['movie', { tag: '日本' }],
                 '高分电影': ['movie', { tag: '豆瓣高分' }], '最新电影': ['movie', { tag: '最新' }],
+                '电视剧': ['tv', {}], '剧集': ['tv', {}], '连续剧': ['tv', {}],
+                '国产剧': ['tv', { tag: '国产' }], '国剧': ['tv', { tag: '国产' }],
+                '美剧': ['tv', { tag: '欧美' }], '韩剧': ['tv', { tag: '韩国' }], '日剧': ['tv', { tag: '日本' }],
+                '纪录片': ['tv', { tag: '纪录片' }],
+                '综艺': ['variety', {}], '国内综艺': ['variety', { tag: '国内' }], '国外综艺': ['variety', { tag: '国外' }],
             };
             function fromSearch(kw) {
                 const hit = ALIAS[String(kw || '').trim()];
                 return hit ? { type: hit[0], sel: Object.assign({}, hit[1]) } : null;
             }
             const ROWS = {
-                movieHot: ['movie', { tag: '热门' }], movieNew: ['movie', { tag: '最新' }],
-                movieTop: ['movie', { tag: '豆瓣高分' }], movieCold: ['movie', { tag: '冷门佳片' }],
-                movieCN: ['movie', { tag: '华语' }], movieUS: ['movie', { tag: '欧美' }],
-                movieKR: ['movie', { tag: '韩国' }], movieJP: ['movie', { tag: '日本' }],
-                tvHot: ['tv', { tag: '最近热门' }], tvCN: ['tv', { tag: '国产' }],
-                tvUS: ['tv', { tag: '欧美' }], tvJP: ['tv', { tag: '日本' }],
-                tvKR: ['tv', { tag: '韩国' }], tvDoc: ['tv', { tag: '纪录片' }],
-                tvAnime: ['anime', { tag: '最近热门' }], tvShow: ['variety', { tag: '最近热门' }],
+                movieHot: ['movie', { tag: '热门' }],
+                tvHot: ['tv', { tag: '最近热门' }],
+                tvShow: ['variety', { tag: '最近热门' }],
             };
             function rowPreset(key) {
                 const r = ROWS[key];
@@ -9288,13 +9018,9 @@
         //   本机 / 服务器存的值可能来自旧版本或别的设备,用之前一律过 normalize。scripts/home-layout-test.mjs 直接测这一段。
         const DgHome = (() => {
             const SECTIONS = [
-                { k: 'history', l: '继续观看', icon: 'fa-history' },
-                { k: 'fav', l: '我的收藏', icon: 'fa-heart' },
-                { k: 'recommend', l: '为你推荐', icon: 'fa-magic' },
-                { k: 'popular', l: '大家都在看', icon: 'fa-users' },
-                { k: 'live', l: '直播频道', icon: 'fa-tower-broadcast' },
-                { k: 'catnav', l: '分类栏', icon: 'fa-table-cells-large' },
-                { k: 'random', l: '随机盲盒', icon: 'fa-dice' },
+                { k: 'movieHot', l: '热门电影', icon: 'fa-film' },
+                { k: 'tvHot', l: '热门电视剧', icon: 'fa-tv' },
+                { k: 'tvShow', l: '热门综艺', icon: 'fa-microphone-alt' },
             ];
             const BY_K = {};
             for (const s of SECTIONS) BY_K[s.k] = s;
@@ -9313,7 +9039,7 @@
             // 没存过布局:默认顺序;老版本的「隐藏随机盲盒」(donggua_hide_random)= 随机盲盒关
             function initial(saved, legacyHideRandom) {
                 if (saved) { try { const v = JSON.parse(saved); if (Array.isArray(v)) return normalize(v); } catch (e) { } }
-                return SECTIONS.map(s => ({ k: s.k, on: !(s.k === 'random' && legacyHideRandom) }));
+                return SECTIONS.map(s => ({ k: s.k, on: true }));
             }
             function swap(layout, a, b) {
                 const i = layout.findIndex(s => s.k === a), j = layout.findIndex(s => s.k === b);
@@ -9725,13 +9451,12 @@
                     pageLoadingKeys: {}, // 防止重复快速点击加载 { movieRow: true, ... }
                     // 🗂️ 首页分类分组：默认全部收起，点开某组才请求该组榜单
                     homeGroups: [
-                        { k: 'movie', l: '电影', icon: 'fa-film', keys: ['movieHot', 'movieNew', 'movieTop', 'movieCold', 'movieCN', 'movieUS', 'movieKR', 'movieJP'] },
-                        { k: 'tv', l: '剧集', icon: 'fa-tv', keys: ['tvHot', 'tvCN', 'tvUS', 'tvJP', 'tvKR', 'tvDoc'] },
-                        { k: 'anime', l: '动漫', icon: 'fa-dragon', keys: ['tvAnime'] },
+                        { k: 'movie', l: '电影', icon: 'fa-film', keys: ['movieHot'] },
+                        { k: 'tv', l: '电视剧', icon: 'fa-tv', keys: ['tvHot'] },
                         { k: 'variety', l: '综艺', icon: 'fa-microphone-alt', keys: ['tvShow'] },
                     ],
                     homeGroupOpen: (function () {
-                        const base = { movie: false, tv: false, anime: false, variety: false };
+                        const base = { movie: false, tv: false, variety: false };
                         try {
                             if (typeof localStorage === 'undefined') return base;
                             const raw = JSON.parse(localStorage.getItem('donggua_home_groups') || 'null');
@@ -9742,23 +9467,9 @@
                         return base;
                     })(),
                     rowConfigs: {
-                        randomRow: { title: '随机盲盒·惊喜呈现', icon: 'fa-random', source: 'douban-random', page: 1 },
-                        movieHot: { title: '热门电影·豆瓣热榜', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '热门', page: 1 },
-                        movieNew: { title: '最新电影·新片速递', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '最新', page: 1 },
-                        movieTop: { title: '豆瓣高分·口碑佳作', icon: 'fa-star', source: 'douban-tag', kind: 'movie', tag: '豆瓣高分', page: 1 },
-                        movieCold: { title: '冷门佳片·遗珠之选', icon: 'fa-gem', source: 'douban-tag', kind: 'movie', tag: '冷门佳片', page: 1 },
-                        movieCN: { title: '华语电影·本土佳作', icon: 'fa-dragon', source: 'douban-tag', kind: 'movie', tag: '华语', page: 1 },
-                        movieUS: { title: '欧美电影·全球视野', icon: 'fa-flag-usa', source: 'douban-tag', kind: 'movie', tag: '欧美', page: 1 },
-                        movieKR: { title: '韩国电影·韩式风味', icon: 'fa-heart', source: 'douban-tag', kind: 'movie', tag: '韩国', page: 1 },
-                        movieJP: { title: '日本电影·日式美学', icon: 'fa-mask', source: 'douban-tag', kind: 'movie', tag: '日本', page: 1 },
-                        tvHot: { title: '最近热门·剧集', icon: 'fa-tv', source: 'douban-recent', kind: 'tv', category: '最近热门', type: '全部', page: 1 },
-                        tvCN: { title: '国产剧·华语剧集', icon: 'fa-dragon', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_domestic', page: 1 },
-                        tvUS: { title: '欧美剧·高能剧集', icon: 'fa-flag-usa', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_american', page: 1 },
-                        tvJP: { title: '日剧·日式故事', icon: 'fa-mask', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_japanese', page: 1 },
-                        tvKR: { title: '韩剧·韩流来袭', icon: 'fa-heart', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_korean', page: 1 },
-                        tvAnime: { title: '动漫·二次元番剧', icon: 'fa-ghost', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_animation', page: 1 },
-                        tvDoc: { title: '纪录片·探索世界', icon: 'fa-video', source: 'douban-recent', kind: 'tv', category: '热门', type: 'tv_documentary', page: 1 },
-                        tvShow: { title: '综艺·娱乐生活', icon: 'fa-microphone-alt', source: 'douban-recent', kind: 'tv', category: '热门', type: '综艺', page: 1 },
+                        movieHot: { title: '热门电影', icon: 'fa-film', source: 'douban-tag', kind: 'movie', tag: '热门', page: 1 },
+                        tvHot: { title: '热门电视剧', icon: 'fa-tv', source: 'douban-recent', kind: 'tv', category: '最近热门', type: 'tv', page: 1 },
+                        tvShow: { title: '热门综艺', icon: 'fa-microphone-alt', source: 'douban-recent', kind: 'tv', category: '热门', type: 'show_domestic', page: 1 },
                     },
 
                     movieList: [], tvList: [], list_cn: [], list_krjp: [],
@@ -10091,34 +9802,16 @@
                 },
                 // 首页按顺序渲染的块:开着且有内容的板块(随机盲盒就是 randomRow 那一行榜单),后面接其余分类榜单(不参与排序)
                 homeBlocks() {
-                    const has = {
-                        history: this.watchHistory.length > 0,
-                        fav: this.favoritesEnabled && this.favList.length > 0,
-                        recommend: this.recommendList.length > 0,
-                        popular: this.popularShown.length >= 4,
-                        live: this.liveEnabled && this.liveChannels.length > 0,
-                        catnav: true,
-                    };
                     const row = key => ({ id: 'row:' + key, k: 'row', key, config: this.rowConfigs[key] });
                     const out = [];
                     for (const s of this.homeLayout) {
-                        if (!s.on) continue;
-                        if (s.k === 'random') out.push(row('randomRow'));
-                        else if (has[s.k]) out.push({ id: s.k, k: s.k });
-                    }
-                    for (const g of this.homeGroups) {
-                        out.push({ id: 'group:' + g.k, k: 'group', key: g.k, config: g });
-                        if (this.homeGroupOpen[g.k]) {
-                            for (const key of g.keys) out.push(row(key));
-                        }
+                        if (s.on && this.rowConfigs[s.k]) out.push(row(s.k));
                     }
                     return out;
                 },
                 // 偏好设置里列出的板块:站长没开的(直播 / 收藏)不列
                 homeLayoutView() {
-                    return this.homeLayout
-                        .filter(s => !(s.k === 'live' && !this.liveEnabled) && !(s.k === 'fav' && !this.favoritesEnabled))
-                        .map(s => Object.assign({}, DgHome.info(s.k), { on: s.on }));
+                    return this.homeLayout.map(s => Object.assign({}, DgHome.info(s.k), { on: s.on }));
                 },
                 homeLayoutIsDefault() { return DgHome.isDefault(this.homeLayout); },
                 trialLeftText() { return DgTrial.fmt(DgTrial.left(this.trial.limit, this.trial.used)); },
@@ -10669,14 +10362,13 @@
                     // 初始化云同步（如果启用）
                     this.initHistorySync();
 
-                    // ✨ 为你推荐：延迟低优先级加载(等首页榜单先渲染)，无历史时方法内部直接跳过
-                    setTimeout(() => this.fetchRecommendations(), 2500);
-                    // 👥 大家都在看：比推荐再晚一点(都是低优先级的 TMDB 查询,错开)
-                    setTimeout(() => this.fetchPopular(), 3500);
-
-                    // 📺 直播：先用本地缓存秒显，再延迟拉取最新频道列表
-                    this._loadLiveRecentLocal();
-                    setTimeout(() => this.fetchLiveChannels(), 1800);
+                    // ✨ 为你推荐 / 大家都在看 / 直播已从首页移除：只在有对应板块时才加载
+                    if (this.homeOn.recommend) setTimeout(() => this.fetchRecommendations(), 2500);
+                    if (this.homeOn.popular) setTimeout(() => this.fetchPopular(), 3500);
+                    if (this.homeOn.live) {
+                        this._loadLiveRecentLocal();
+                        setTimeout(() => this.fetchLiveChannels(), 1800);
+                    }
 
                     // ⬇️ 离线缓存：启动时读一次元数据(入口角标显示数量；不加载分段数据)
                     this.refreshOfflineList();
@@ -11420,6 +11112,7 @@
                 toggleHomeSection(k, on) {
                     this.homeLayout = this.homeLayout.map(s => s.k === k ? { k, on: !!on } : s);
                     this._saveHomeLayout();
+                    if (on && this.rowConfigs[k] && (!this.rowLists[k] || !this.rowLists[k].length)) this.fetchRow(k);
                 },
                 resetHomeLayout() {
                     this.homeLayout = DgHome.normalize(null);
@@ -13861,15 +13554,8 @@
 
                 // 初始化榜单 (优先加载首屏可见榜单)
                 fetchAllLists() {
-                    const keys = [];
-                    if (this.homeOn.random) keys.push('randomRow');
-                    for (const g of this.homeGroups) {
-                        if (this.homeGroupOpen[g.k]) keys.push(...g.keys);
-                    }
-                    if (!keys.length) {
-                        console.log('[榜单加载] 全部分类已收起，跳过请求');
-                        return;
-                    }
+                    const keys = this.homeLayout.filter(s => s.on && this.rowConfigs[s.k]).map(s => s.k);
+                    if (!keys.length) return;
 
                     // 设备检测（仅用于日志）
                     const viewportWidth = window.innerWidth;
@@ -15194,6 +14880,13 @@
                             this.heroActiveIndex = i;
                         }
                     } catch (err) { }
+                },
+                // 📱 只给当前和下一张 Hero 背景图发请求：手机首屏不一次拉 5 张大图
+                heroBackdrop(item, index) {
+                    const n = this.heroList.length || 0;
+                    if (!n || !item || !item.backdrop) return 'none';
+                    const a = this.heroActiveIndex || 0;
+                    return (index === a || index === (a + 1) % n) ? 'url(' + item.backdrop + ')' : 'none';
                 },
 
                 finalPoster(item, isHot = false) {
@@ -16767,6 +16460,18 @@
                     } catch (e) { }
                 },
                 play(url) {
+                    if (window.DPlayer && window.Hls) return this._playNow(url);
+                    const seq = (this._playLibSeq = (this._playLibSeq || 0) + 1);
+                    if (this.showMiniToast) this.showMiniToast('正在加载播放器…');
+                    ensurePlayerLibs().then(() => {
+                        if (seq !== this._playLibSeq) return;
+                        this._playNow(url);
+                    }).catch(e => {
+                        console.error('[Player] 播放器库加载失败:', e);
+                        if (this.showMiniToast) this.showMiniToast('播放器加载失败，请刷新重试');
+                    });
+                },
+                _playNow(url) {
                     // ⬇️ 离线缓存重定向:本集(剧名|集名)已完整缓存 → 本次播放【完全走本地】:
                     //    ①URL 不同(资源站轮换/换过线路)→ 改播下载时的 URL 并钉回选集条目;
                     //    ②跳过线路代理/广告过滤包装(内容出自 IDB,不需要 CORS/过滤;包装形态差异曾导致静默走网络);
