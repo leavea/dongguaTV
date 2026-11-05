@@ -87,9 +87,11 @@
     <script data-cfasync="false" src="libs/js/vue.global.prod.min.js"></script>
 
     <!-- 非关键脚本 (延迟加载) -->
+    <script data-cfasync="false" src="libs/js/hls.min.js?v=1.1.5-lc1" defer></script>   <!-- ?v= 必带:/libs 有 30 天 HTTP 缓存,补丁版(AAC-LC 信令,见 _dgHlsCustomType 注释)靠换 URL 才能到达老用户浏览器 -->
     <script data-cfasync="false" src="libs/js/kz-titlematch.js?v=1" defer></script>   <!-- 🎌 Kazumi 源片名归一化/并组(服务端 lib/kazumi 共用同一文件) -->
     <script data-cfasync="false" src="libs/js/ad-clip-core.js?v=6" defer></script>   <!-- 🛡️ 插播广告"分辨率突变/时间戳重启"判定 + 原生 HLS 分片头解析(window.adClipSkip 用;改了要升 ?v= 和 sw.js 版本) -->
     <script data-cfasync="false" src="libs/js/ad-filter.js?v=4.0" defer></script>
+    <script data-cfasync="false" src="libs/js/DPlayer.min.js" defer></script>
     <script data-cfasync="false" src="libs/js/bootstrap.bundle.min.js" defer></script>
 
     <style>
@@ -6497,33 +6499,6 @@
             const t = setTimeout(() => ctl.abort(), timeoutMs || 8000);
             return fetch(url, { ...(options || {}), signal: ctl.signal }).finally(() => clearTimeout(t));
         }
-
-        // 🎬 播放器库按需加载：首页不下载 hls.js / DPlayer，第一次播放时才拉取。
-        const _playerScripts = new Map();
-        function loadPlayerScript(src) {
-            if (_playerScripts.has(src)) return _playerScripts.get(src);
-            const p = new Promise((resolve, reject) => {
-                const el = document.createElement('script');
-                el.src = src;
-                el.async = true;
-                el.onload = () => resolve();
-                el.onerror = () => { _playerScripts.delete(src); reject(new Error('加载失败: ' + src)); };
-                document.head.appendChild(el);
-            });
-            _playerScripts.set(src, p);
-            return p;
-        }
-        let _playerLibsPromise = null;
-        function ensurePlayerLibs() {
-            if (window.DPlayer && window.Hls) return Promise.resolve();
-            if (_playerLibsPromise) return _playerLibsPromise;
-            _playerLibsPromise = Promise.all([
-                window.Hls ? Promise.resolve() : loadPlayerScript('libs/js/hls.min.js?v=1.1.5-lc1'),
-                window.DPlayer ? Promise.resolve() : loadPlayerScript('libs/js/DPlayer.min.js'),
-            ]).catch(e => { _playerLibsPromise = null; throw e; });
-            return _playerLibsPromise;
-        }
-        window.ensurePlayerLibs = ensurePlayerLibs;
 
         // ========== 📸 截一帧分享(分享当前画面)的纯函数核心 ==========
         //   scripts/frame-share-test.mjs 按 <dg-frame-share-core> 这对标记把整段抽出来在 node 里跑 —— 段内只用参数,不碰页面里的其它变量/DOM。
@@ -16460,18 +16435,6 @@
                     } catch (e) { }
                 },
                 play(url) {
-                    if (window.DPlayer && window.Hls) return this._playNow(url);
-                    const seq = (this._playLibSeq = (this._playLibSeq || 0) + 1);
-                    if (this.showMiniToast) this.showMiniToast('正在加载播放器…');
-                    ensurePlayerLibs().then(() => {
-                        if (seq !== this._playLibSeq) return;
-                        this._playNow(url);
-                    }).catch(e => {
-                        console.error('[Player] 播放器库加载失败:', e);
-                        if (this.showMiniToast) this.showMiniToast('播放器加载失败，请刷新重试');
-                    });
-                },
-                _playNow(url) {
                     // ⬇️ 离线缓存重定向:本集(剧名|集名)已完整缓存 → 本次播放【完全走本地】:
                     //    ①URL 不同(资源站轮换/换过线路)→ 改播下载时的 URL 并钉回选集条目;
                     //    ②跳过线路代理/广告过滤包装(内容出自 IDB,不需要 CORS/过滤;包装形态差异曾导致静默走网络);
